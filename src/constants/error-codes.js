@@ -1,0 +1,4 @@
+module.exports = Object.freeze({
+  INTERNAL_ERROR: 'INTERNAL_ERROR',
+  RESOURCE_NOT_FOUND: 'RESOURCE_NOT_FOUND',
+});
