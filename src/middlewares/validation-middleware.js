@@ -18,9 +18,8 @@ function validate(schema, property = 'body') {
       }));
       const invalidObjectId = error.details.some(
         (detail) =>
-          property === 'params' &&
-          detail.path.at(-1) === 'id' &&
-          detail.type === 'string.pattern.base',
+          detail.type === 'string.pattern.base' &&
+          /(^id$|Id$)/.test(String(detail.path.at(-1))),
       );
 
       return next(
