@@ -14,7 +14,6 @@ function notFoundError() {
     'Substância não encontrada.',
   );
 }
-
 function duplicateError() {
   return new AppError(
     409,
@@ -66,7 +65,12 @@ async function listSubstances(query) {
   }
 
   const skip = (page - 1) * limit;
-  const sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
+const direction = sortOrder === 'asc' ? 1 : -1;
+
+const sort = {
+  [sortBy]: direction,
+  _id: direction,
+};
   const [substances, total] = await Promise.all([
     Substance.find(filters).sort(sort).skip(skip).limit(limit),
     Substance.countDocuments(filters),
