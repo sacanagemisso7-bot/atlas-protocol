@@ -1,4 +1,5 @@
 const express = require('express');
+const cors = require('cors');
 
 const errorHandler = require('./middlewares/error-handler');
 const notFoundHandler = require('./middlewares/not-found-handler');
@@ -7,6 +8,14 @@ const routes = require('./routes');
 const app = express();
 
 app.disable('x-powered-by');
+app.use(
+  cors({
+    origin: [
+      'http://localhost:4200',
+    ],
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 app.use('/api/v1', routes);
