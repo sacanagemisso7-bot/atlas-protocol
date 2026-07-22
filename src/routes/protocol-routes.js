@@ -3,6 +3,7 @@ const express = require('express');
 const USER_ROLES = require('../constants/user-roles');
 const protocolController = require('../controllers/protocol-controller');
 const authMiddleware = require('../middlewares/auth-middleware');
+const professionalApprovalMiddleware = require('../middlewares/professional-approval-middleware');
 const allowRoles = require('../middlewares/role-middleware');
 const validate = require('../middlewares/validation-middleware');
 const asyncHandler = require('../utils/async-handler');
@@ -24,30 +25,35 @@ router.use(authMiddleware);
 router.post(
   '/',
   allowRoles(USER_ROLES.PROFESSIONAL),
+  professionalApprovalMiddleware,
   validate(createProtocolSchema),
   asyncHandler(protocolController.createProtocol),
 );
 router.get(
   '/',
   allowRoles(...allRoles),
+  professionalApprovalMiddleware,
   validate(protocolListQuerySchema, 'query'),
   asyncHandler(protocolController.listProtocols),
 );
 router.get(
   '/:id/versions/:versionNumber',
   allowRoles(...allRoles),
+  professionalApprovalMiddleware,
   validate(protocolVersionParamsSchema, 'params'),
   asyncHandler(protocolController.getVersion),
 );
 router.get(
   '/:id/versions',
   allowRoles(...allRoles),
+  professionalApprovalMiddleware,
   validate(protocolIdParamsSchema, 'params'),
   asyncHandler(protocolController.listVersions),
 );
 router.patch(
   '/:id/activate',
   allowRoles(USER_ROLES.PROFESSIONAL),
+  professionalApprovalMiddleware,
   validate(protocolIdParamsSchema, 'params'),
   validate(emptyBodySchema),
   asyncHandler(protocolController.activateProtocol),
@@ -55,6 +61,7 @@ router.patch(
 router.patch(
   '/:id/pause',
   allowRoles(USER_ROLES.PROFESSIONAL),
+  professionalApprovalMiddleware,
   validate(protocolIdParamsSchema, 'params'),
   validate(reasonSchema),
   asyncHandler(protocolController.pauseProtocol),
@@ -62,6 +69,7 @@ router.patch(
 router.patch(
   '/:id/close',
   allowRoles(USER_ROLES.PROFESSIONAL),
+  professionalApprovalMiddleware,
   validate(protocolIdParamsSchema, 'params'),
   validate(reasonSchema),
   asyncHandler(protocolController.closeProtocol),
@@ -69,6 +77,7 @@ router.patch(
 router.patch(
   '/:id/cancel',
   allowRoles(USER_ROLES.PROFESSIONAL),
+  professionalApprovalMiddleware,
   validate(protocolIdParamsSchema, 'params'),
   validate(emptyBodySchema),
   asyncHandler(protocolController.cancelProtocol),
@@ -76,6 +85,7 @@ router.patch(
 router.patch(
   '/:id',
   allowRoles(USER_ROLES.PROFESSIONAL),
+  professionalApprovalMiddleware,
   validate(protocolIdParamsSchema, 'params'),
   validate(updateProtocolSchema),
   asyncHandler(protocolController.updateProtocol),
@@ -83,6 +93,7 @@ router.patch(
 router.get(
   '/:id',
   allowRoles(...allRoles),
+  professionalApprovalMiddleware,
   validate(protocolIdParamsSchema, 'params'),
   asyncHandler(protocolController.getProtocol),
 );

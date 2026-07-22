@@ -5,17 +5,41 @@ const request = require('supertest');
 
 const app = require('../../src/app');
 const ProfessionalAthleteLink = require('../../src/models/professional-athlete-link');
+const ProfessionalProfile = require('../../src/models/professional-profile');
 const User = require('../../src/models/user');
 const { generateToken } = require('../../src/utils/jwt');
 
 async function createUser(role, overrides = {}) {
-  return User.create({
+  const { profileStatus, ...userOverrides } = overrides;
+  const user = await User.create({
     name: `Usuário ${role}`,
     email: `${role}-${new mongoose.Types.ObjectId()}@example.com`,
     passwordHash: await bcrypt.hash('SenhaForte123!', 10),
     role,
-    ...overrides,
+    ...userOverrides,
   });
+
+  if (role === 'professional') {
+    const verificationStatus = profileStatus || 'approved';
+    await ProfessionalProfile.create({
+      userId: user.id,
+      verificationStatus,
+      verificationDocument: {
+        storageKey: `${user.id}.pdf`,
+        url: `/private-files/${user.id}.pdf`,
+        originalName: 'documento.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 20,
+      },
+      submittedAt: new Date(),
+      reviewedAt: verificationStatus === 'pending' ? null : new Date(),
+      reviewedBy: verificationStatus === 'pending' ? null : user.id,
+      rejectionReason:
+        verificationStatus === 'rejected' ? 'Documento rejeitado.' : null,
+    });
+  }
+
+  return user;
 }
 
 async function createLink(professional, athlete, overrides = {}) {
@@ -44,6 +68,7 @@ describe('vínculos profissional-atleta', () => {
   afterEach(async () => {
     await Promise.all([
       ProfessionalAthleteLink.deleteMany({}),
+      ProfessionalProfile.deleteMany({}),
       User.deleteMany({}),
     ]);
   });
@@ -196,6 +221,19 @@ describe('vínculos profissional-atleta', () => {
   });
 
   describe('GET /api/v1/links', () => {
+    it('impede profissional pendente de usar funcionalidade profissional', async () => {
+      const professional = await createUser('professional', {
+        profileStatus: 'pending',
+      });
+
+      const response = await request(app)
+        .get('/api/v1/links')
+        .set('Authorization', authorization(professional));
+
+      expect(response.status).toBe(403);
+      expect(response.body.error.code).toBe('PROFESSIONAL_PENDING_APPROVAL');
+    });
+
     it('permite que admin liste todos com paginação e filtros', async () => {
       const admin = await createUser('admin');
       const professional = await createUser('professional');

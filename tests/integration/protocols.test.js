@@ -5,6 +5,7 @@ const request = require('supertest');
 
 const app = require('../../src/app');
 const ProfessionalAthleteLink = require('../../src/models/professional-athlete-link');
+const ProfessionalProfile = require('../../src/models/professional-profile');
 const Protocol = require('../../src/models/protocol');
 const ProtocolVersion = require('../../src/models/protocol-version');
 const Substance = require('../../src/models/substance');
@@ -12,12 +13,31 @@ const User = require('../../src/models/user');
 const { generateToken } = require('../../src/utils/jwt');
 
 async function createUser(role) {
-  return User.create({
+  const user = await User.create({
     name: `Usuário ${role}`,
     email: `${role}-${new mongoose.Types.ObjectId()}@example.com`,
     passwordHash: await bcrypt.hash('SenhaForte123!', 10),
     role,
   });
+
+  if (role === 'professional') {
+    await ProfessionalProfile.create({
+      userId: user.id,
+      verificationStatus: 'approved',
+      verificationDocument: {
+        storageKey: `${user.id}.pdf`,
+        url: `/private-files/${user.id}.pdf`,
+        originalName: 'documento.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 20,
+      },
+      submittedAt: new Date(),
+      reviewedAt: new Date(),
+      reviewedBy: user.id,
+    });
+  }
+
+  return user;
 }
 
 async function createSubstance(admin, overrides = {}) {
@@ -91,6 +111,7 @@ describe('protocolos e versionamento', () => {
       ProtocolVersion.deleteMany({}),
       Protocol.deleteMany({}),
       ProfessionalAthleteLink.deleteMany({}),
+      ProfessionalProfile.deleteMany({}),
       Substance.deleteMany({}),
       User.deleteMany({}),
     ]);

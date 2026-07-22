@@ -221,19 +221,39 @@ describe('gestão de usuários', () => {
       const response = await request(app)
         .patch(`/api/v1/users/${athlete.id}`)
         .set('Authorization', authorization(admin))
-        .send({ name: 'Novo Profissional', role: 'professional', active: false });
+        .send({ name: 'Novo Administrador', role: 'admin', active: false });
 
       expect(response.status).toBe(200);
       expect(response.body.data.user).toMatchObject({
-        name: 'Novo Profissional',
-        role: 'professional',
+        name: 'Novo Administrador',
+        role: 'admin',
         active: false,
       });
     });
 
     it.each([
+      ['promover para professional', 'athlete', 'professional'],
+      ['remover o perfil professional', 'professional', 'athlete'],
+    ])(
+      'impede admin de %s fora do fluxo de verificação',
+      async (_description, currentRole, requestedRole) => {
+        const admin = await createUser({ role: 'admin' });
+        const target = await createUser({ role: currentRole });
+
+        const response = await request(app)
+          .patch(`/api/v1/users/${target.id}`)
+          .set('Authorization', authorization(admin))
+          .send({ role: requestedRole });
+
+        expect(response.status).toBe(422);
+        expect(response.body.error.code).toBe('INVALID_STATE_TRANSITION');
+        expect((await User.findById(target.id)).role).toBe(currentRole);
+      },
+    );
+
+    it.each([
       ['desativado', { active: false }],
-      ['ter o perfil alterado', { role: 'professional' }],
+      ['ter o perfil alterado', { role: 'athlete' }],
     ])('protege o último admin ativo de ser %s', async (_case, update) => {
       const admin = await createUser({ role: 'admin' });
 

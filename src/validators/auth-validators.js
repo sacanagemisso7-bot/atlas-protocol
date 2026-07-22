@@ -24,6 +24,8 @@ const registerSchema = Joi.object({
   password,
 }).unknown(false);
 
+const registerProfessionalSchema = registerSchema;
+
 const loginSchema = Joi.object({
   email,
   password: Joi.string().max(72).required().messages({
@@ -42,4 +44,9 @@ const passwordChangeSchema = Joi.object({
   newPassword: password,
 }).unknown(false);
 
-module.exports = { loginSchema, passwordChangeSchema, registerSchema };
+module.exports = {
+  loginSchema,
+  passwordChangeSchema,
+  registerProfessionalSchema,
+  registerSchema,
+};

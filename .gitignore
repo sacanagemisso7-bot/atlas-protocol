@@ -3,6 +3,7 @@ node_modules/
 .env.*
 !.env.example
 coverage/
+.storage/
 npm-debug.log*
 .DS_Store
 AGENTS.md

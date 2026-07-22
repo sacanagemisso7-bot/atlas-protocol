@@ -2,8 +2,13 @@ const bcrypt = require('bcrypt');
 
 const env = require('../config/env');
 const ERROR_CODES = require('../constants/error-codes');
+const PROFESSIONAL_VERIFICATION_STATUSES = require(
+  '../constants/professional-verification-statuses'
+);
 const USER_ROLES = require('../constants/user-roles');
+const ProfessionalProfile = require('../models/professional-profile');
 const User = require('../models/user');
+const storage = require('../storage');
 const AppError = require('../utils/app-error');
 const { generateToken } = require('../utils/jwt');
 const toSafeUser = require('../utils/user-response');
@@ -24,15 +29,62 @@ function blockedUserError() {
   );
 }
 
+function emailAlreadyExistsError() {
+  return new AppError(
+    409,
+    ERROR_CODES.EMAIL_ALREADY_EXISTS,
+    'Já existe um usuário com este e-mail.',
+  );
+}
+
+function professionalVerificationRequiredError() {
+  return new AppError(
+    403,
+    ERROR_CODES.PROFESSIONAL_VERIFICATION_REQUIRED,
+    'Verificação profissional necessária.',
+  );
+}
+
+function sanitizeOriginalName(originalName) {
+  const baseName = String(originalName || '')
+    .replace(/^.*[\\/]/, '')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .trim();
+
+  return (baseName || 'document.pdf').slice(0, 255);
+}
+
+async function getProfessionalProfile(userId) {
+  const profile = await ProfessionalProfile.findOne({ userId });
+
+  if (!profile) {
+    throw professionalVerificationRequiredError();
+  }
+
+  return profile;
+}
+
+function toSafeProfessionalUser(user, profile, includeRejectionReason = false) {
+  const safeUser = {
+    ...toSafeUser(user),
+    verificationStatus: profile.verificationStatus,
+  };
+
+  if (
+    includeRejectionReason &&
+    profile.verificationStatus === PROFESSIONAL_VERIFICATION_STATUSES.REJECTED
+  ) {
+    safeUser.rejectionReason = profile.rejectionReason;
+  }
+
+  return safeUser;
+}
+
 async function register({ name, email, password }) {
   const existingUser = await User.exists({ email });
 
   if (existingUser) {
-    throw new AppError(
-      409,
-      ERROR_CODES.EMAIL_ALREADY_EXISTS,
-      'Já existe um usuário com este e-mail.',
-    );
+    throw emailAlreadyExistsError();
   }
 
   const passwordHash = await bcrypt.hash(password, env.bcryptSaltRounds);
@@ -47,16 +99,84 @@ async function register({ name, email, password }) {
     });
   } catch (error) {
     if (error.code === 11000) {
-      throw new AppError(
-        409,
-        ERROR_CODES.EMAIL_ALREADY_EXISTS,
-        'Já existe um usuário com este e-mail.',
-      );
+      throw emailAlreadyExistsError();
     }
     throw error;
   }
 
   return { user: toSafeUser(user), token: generateToken(user) };
+}
+
+async function registerProfessional({ name, email, password }, document) {
+  if (!document) {
+    throw new AppError(
+      400,
+      ERROR_CODES.PROFESSIONAL_VERIFICATION_REQUIRED,
+      'Envie o documento profissional em PDF.',
+    );
+  }
+
+  const existingUser = await User.exists({ email });
+
+  if (existingUser) {
+    throw emailAlreadyExistsError();
+  }
+
+  const passwordHash = await bcrypt.hash(password, env.bcryptSaltRounds);
+  let profile;
+  let storedDocument;
+  let user;
+
+  try {
+    storedDocument = await storage.store(document);
+    user = await User.create({
+      name,
+      email,
+      passwordHash,
+      role: USER_ROLES.PROFESSIONAL,
+    });
+    profile = await ProfessionalProfile.create({
+      userId: user.id,
+      verificationStatus: PROFESSIONAL_VERIFICATION_STATUSES.PENDING,
+      verificationDocument: {
+        ...storedDocument,
+        originalName: sanitizeOriginalName(document.originalname),
+        mimeType: document.mimetype,
+        sizeBytes: document.size,
+      },
+    });
+  } catch (error) {
+    const cleanupOperations = [];
+
+    if (profile) {
+      cleanupOperations.push(
+        ProfessionalProfile.deleteOne({ _id: profile.id }),
+      );
+    }
+    if (user) {
+      cleanupOperations.push(User.deleteOne({ _id: user.id }));
+    }
+    if (storedDocument) {
+      cleanupOperations.push(storage.remove(storedDocument.storageKey));
+    }
+
+    await Promise.allSettled(cleanupOperations);
+
+    if (error.code === 11000) {
+      throw emailAlreadyExistsError();
+    }
+
+    throw error;
+  }
+
+  return {
+    user: toSafeUser(user),
+    verification: {
+      status: profile.verificationStatus,
+      submittedAt: profile.submittedAt,
+    },
+    token: generateToken(user),
+  };
 }
 
 async function login({ email, password }) {
@@ -70,10 +190,17 @@ async function login({ email, password }) {
     throw blockedUserError();
   }
 
+  let safeUser = toSafeUser(user);
+
+  if (user.role === USER_ROLES.PROFESSIONAL) {
+    const profile = await getProfessionalProfile(user.id);
+    safeUser = toSafeProfessionalUser(user, profile);
+  }
+
   user.lastLoginAt = new Date();
   await user.save();
 
-  return { user: toSafeUser(user), token: generateToken(user) };
+  return { user: safeUser, token: generateToken(user) };
 }
 
 async function getCurrentUser(userId) {
@@ -85,6 +212,11 @@ async function getCurrentUser(userId) {
       ERROR_CODES.RESOURCE_NOT_FOUND,
       'Usuário não encontrado.',
     );
+  }
+
+  if (user.role === USER_ROLES.PROFESSIONAL) {
+    const profile = await getProfessionalProfile(user.id);
+    return toSafeProfessionalUser(user, profile, true);
   }
 
   return toSafeUser(user);
@@ -106,4 +238,10 @@ async function changePassword(userId, { currentPassword, newPassword }) {
   return toSafeUser(user);
 }
 
-module.exports = { changePassword, getCurrentUser, login, register };
+module.exports = {
+  changePassword,
+  getCurrentUser,
+  login,
+  register,
+  registerProfessional,
+};

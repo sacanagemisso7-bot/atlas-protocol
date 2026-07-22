@@ -10,6 +10,19 @@ async function register(request, response) {
   });
 }
 
+async function registerProfessional(request, response) {
+  const result = await authService.registerProfessional(
+    request.body,
+    request.file,
+  );
+
+  return response.status(201).json({
+    success: true,
+    data: result,
+    message: 'Cadastro enviado para análise.',
+  });
+}
+
 async function login(request, response) {
   const result = await authService.login(request.body);
 
@@ -40,4 +53,10 @@ async function changePassword(request, response) {
   });
 }
 
-module.exports = { changePassword, login, me, register };
+module.exports = {
+  changePassword,
+  login,
+  me,
+  register,
+  registerProfessional,
+};

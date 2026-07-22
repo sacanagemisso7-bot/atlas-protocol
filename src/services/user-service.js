@@ -28,6 +28,14 @@ function invalidAdminTransitionError() {
   );
 }
 
+function invalidProfessionalRoleTransitionError() {
+  return new AppError(
+    422,
+    ERROR_CODES.INVALID_STATE_TRANSITION,
+    'Alterações para ou a partir do perfil profissional exigem o fluxo específico de verificação.',
+  );
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -98,6 +106,16 @@ async function updateUser(requester, userId, updates) {
 
   const user = await User.findById(userId);
   if (!user) throw resourceNotFoundError();
+
+  const changesProfessionalRole =
+    updates.role !== undefined &&
+    updates.role !== user.role &&
+    (updates.role === USER_ROLES.PROFESSIONAL ||
+      user.role === USER_ROLES.PROFESSIONAL);
+
+  if (changesProfessionalRole) {
+    throw invalidProfessionalRoleTransitionError();
+  }
 
   const removesActiveAdmin =
     user.role === USER_ROLES.ADMIN &&
