@@ -5,11 +5,13 @@
 - Banco: MongoDB.
 - ODM: Mongoose.
 - IDs: `ObjectId`.
-- Timestamps: `createdAt` e `updatedAt`.
+- Timestamps: `createdAt` e `updatedAt` quando aplicável.
 - Datas persistidas em UTC.
-- Exclusão lógica quando houver histórico.
-- Campos sensíveis usam `select: false`.
-- Índices únicos devem ser tratados também no service.
+- Sem exclusão física de dados de negócio na V1.
+- Preferir `active`, `archivedAt` ou estados de domínio.
+- Campos sensíveis usam `select: false` quando possível.
+- Índices únicos também devem ser tratados no service.
+- Arquivos ficam em storage externo/abstraído; MongoDB armazena metadados e referências.
 
 ## 2. User
 
@@ -46,7 +48,48 @@ Validações:
 
 Nunca retornar `passwordHash`.
 
-## 3. ProfessionalAthleteLink
+## 3. ProfessionalProfile
+
+Collection: `professional_profiles`
+
+```js
+{
+  userId: ObjectId,
+  verificationStatus: "pending" | "approved" | "rejected",
+  verificationDocument: {
+    storageKey: String,
+    url: String,
+    originalName: String,
+    mimeType: String,
+    sizeBytes: Number
+  },
+  submittedAt: Date,
+  reviewedAt: Date | null,
+  reviewedBy: ObjectId | null,
+  rejectionReason: String | null,
+  createdAt: Date,
+  updatedAt: Date
+}
+```
+
+Regras:
+
+- `userId` deve referenciar `User.role=professional`;
+- um perfil por profissional;
+- PDF obrigatório no cadastro profissional;
+- fluxo de aprovação é demonstrativo para fins acadêmicos e não certifica credencial real;
+- `reviewedAt` e `reviewedBy` obrigatórios para `approved` ou `rejected`;
+- `rejectionReason` obrigatório quando `rejected`;
+- profissional só exerce permissões profissionais quando `approved`.
+
+Índices:
+
+```js
+{ userId: 1 } // unique
+{ verificationStatus: 1, submittedAt: 1 }
+```
+
+## 4. ProfessionalAthleteLink
 
 Collection: `professional_athlete_links`
 
@@ -54,10 +97,13 @@ Collection: `professional_athlete_links`
 {
   professionalId: ObjectId,
   athleteId: ObjectId,
-  status: "pending" | "active" | "ended",
-  invitedBy: ObjectId | null,
-  startedAt: Date | null,
+  status: "pending" | "active" | "rejected" | "ended",
+  requestedAt: Date,
+  acceptedAt: Date | null,
+  rejectedAt: Date | null,
   endedAt: Date | null,
+  endedBy: ObjectId | null,
+  endReason: String | null,
   createdAt: Date,
   updatedAt: Date
 }
@@ -65,21 +111,23 @@ Collection: `professional_athlete_links`
 
 Validações:
 
-- profissional deve possuir role `professional`;
-- atleta deve possuir role `athlete`;
+- profissional deve ter role `professional` e status `approved` para solicitar;
+- atleta deve ter role `athlete`;
 - usuário não pode vincular-se a si mesmo;
-- `endedAt` obrigatório quando status for `ended`.
+- somente atleta destinatário aceita/rejeita;
+- `endedAt` obrigatório quando status `ended`.
 
 Índices:
 
 ```js
 { professionalId: 1, athleteId: 1, status: 1 }
 { athleteId: 1, status: 1 }
+{ professionalId: 1, status: 1 }
 ```
 
-Regra de unicidade lógica: não pode haver mais de um vínculo `active` para o mesmo par.
+Regra lógica: não pode haver mais de um vínculo `pending` ou `active` para o mesmo par.
 
-## 4. Substance
+## 5. Substance
 
 Collection: `substances`
 
@@ -101,8 +149,8 @@ Validações:
 
 - nome obrigatório, 2–120;
 - `slug` obrigatório;
-- `ownerId` obrigatório quando scope = `private`;
-- `ownerId` nulo quando scope = `global`.
+- `ownerId` obrigatório quando `scope=private`;
+- `ownerId=null` quando `scope=global`.
 
 Índices:
 
@@ -113,7 +161,7 @@ Validações:
 
 Não armazenar orientação automática de uso.
 
-## 5. Protocol
+## 6. Protocol
 
 Collection: `protocols`
 
@@ -140,10 +188,10 @@ Collection: `protocols`
 Validações:
 
 - título: 3–160;
-- `currentVersion`: inteiro >= 1;
+- `currentVersion >= 1`;
 - `endDate >= startDate`;
-- `continuous = true` permite `endDate = null`;
-- profissional precisa ter vínculo ativo.
+- `continuous=true` permite `endDate=null`;
+- profissional precisa estar `approved` e ter vínculo `active`.
 
 Índices:
 
@@ -153,7 +201,9 @@ Validações:
 { athleteId: 1, createdAt: -1 }
 ```
 
-## 6. ProtocolVersion
+Não existe delete físico. Draft descartado vira `cancelled`.
+
+## 7. ProtocolVersion
 
 Collection: `protocol_versions`
 
@@ -191,16 +241,16 @@ Regras:
 - combinação `protocolId + version` única;
 - snapshot obrigatório;
 - `weekDays`: valores 1–7, sem duplicidade;
-- `time`: formato `HH:mm`;
+- `time`: `HH:mm`;
 - versão publicada é imutável.
 
-Índices:
+Índice:
 
 ```js
 { protocolId: 1, version: 1 } // unique
 ```
 
-## 7. TrackingRecord
+## 8. TrackingRecord
 
 Collection: `tracking_records`
 
@@ -210,7 +260,6 @@ Collection: `tracking_records`
   professionalId: ObjectId,
   protocolId: ObjectId | null,
   protocolVersion: Number | null,
-  protocolItemId: String | null,
   type: "scheduled" | "manual",
   title: String,
   scheduledFor: Date,
@@ -218,10 +267,18 @@ Collection: `tracking_records`
   completedAt: Date | null,
   completedBy: ObjectId | null,
   notes: String | null,
+  createdBy: ObjectId,
   createdAt: Date,
   updatedAt: Date
 }
 ```
+
+Regras:
+
+- `scheduledFor` é o único nome de campo temporal de agendamento;
+- protocolo opcional deve estar em estado permitido;
+- status final não retorna a `scheduled` na V1;
+- `completedAt` e `completedBy` coerentes com `completed`.
 
 Índices:
 
@@ -231,7 +288,7 @@ Collection: `tracking_records`
 { athleteId: 1, status: 1, scheduledFor: 1 }
 ```
 
-## 8. CheckIn
+## 9. CheckIn
 
 Collection: `check_ins`
 
@@ -239,42 +296,36 @@ Collection: `check_ins`
 {
   athleteId: ObjectId,
   professionalId: ObjectId,
+  protocolId: ObjectId | null,
   referenceWeek: Date,
   status: "pending" | "submitted" | "reviewed",
-  answers: {
-    weightKg: Number | null,
-    sleepHours: Number | null,
-    energyScore: Number | null,
-    adherenceScore: Number | null,
-    reportedEffects: [String],
-    notes: String | null
-  },
+  responses: Object,
   submittedAt: Date | null,
   reviewedAt: Date | null,
   reviewedBy: ObjectId | null,
   reviewComment: String | null,
-  reopenedAt: Date | null,
   createdAt: Date,
   updatedAt: Date
 }
 ```
 
-Validações:
+Regras:
 
 - `referenceWeek` normalizada para segunda-feira;
-- `weightKg > 0`;
-- scores entre 0 e 10;
-- sono entre 0 e 24;
-- arrays com limite razoável.
+- um check-in por atleta/semana;
+- respostas editáveis apenas enquanto `pending`;
+- sem `reopenedAt` na V1;
+- `submitted -> reviewed`, sem retorno a `pending`.
 
-Índice:
+Índices:
 
 ```js
 { athleteId: 1, referenceWeek: 1 } // unique
 { professionalId: 1, status: 1, referenceWeek: -1 }
+{ protocolId: 1, referenceWeek: -1 }
 ```
 
-## 9. Exam
+## 10. Exam
 
 Collection: `exams`
 
@@ -293,7 +344,13 @@ Collection: `exams`
       referenceRange: String | null
     }
   ],
-  fileUrl: String | null,
+  document: {
+    storageKey: String,
+    url: String,
+    originalName: String,
+    mimeType: String,
+    sizeBytes: Number
+  } | null,
   notes: String | null,
   archivedAt: Date | null,
   createdBy: ObjectId,
@@ -304,9 +361,11 @@ Collection: `exams`
 
 Regras:
 
-- ao menos título e data;
-- valores ficam como string para suportar formatos diversos;
-- sistema não interpreta resultado.
+- título e data obrigatórios;
+- PDF suportado;
+- resultados estruturados opcionais;
+- sistema não interpreta resultado;
+- arquivamento lógico, sem delete físico.
 
 Índices:
 
@@ -315,7 +374,7 @@ Regras:
 { athleteId: 1, archivedAt: 1 }
 ```
 
-## 10. PhysicalProgress
+## 11. PhysicalProgress
 
 Collection: `physical_progress`
 
@@ -343,26 +402,53 @@ Collection: `physical_progress`
 Validações:
 
 - valores não negativos;
-- `bodyFatPercent` entre 0 e 100;
-- pelo menos um dado corporal ou observação.
+- `bodyFatPercent` entre 0 e 100, quando presente;
+- ao menos um dado ou observação;
+- sem julgamento automático do resultado.
 
-Índices:
+Índice:
 
 ```js
 { athleteId: 1, referenceDate: -1 }
 ```
 
-## 11. InventoryItem
+## 12. History/Timeline
+
+Não precisa de collection própria na V1.
+
+A timeline é uma projeção agregada derivada de:
+
+- Protocol/ProtocolVersion;
+- TrackingRecord;
+- CheckIn;
+- Exam;
+- PhysicalProgress;
+- eventos relevantes auditáveis quando apropriado.
+
+Formato sugerido de resposta:
+
+```js
+{
+  id: String,
+  type: "protocol_version" | "tracking" | "checkin" | "exam" | "progress",
+  occurredAt: Date,
+  title: String,
+  summary: String,
+  entityId: ObjectId
+}
+```
+
+Nenhum dado-fonte é alterado pela timeline.
+
+## 13. InventoryItem
 
 Collection: `inventory_items`
 
 ```js
 {
-  ownerId: ObjectId,
+  athleteId: ObjectId,
   substanceId: ObjectId | null,
   name: String,
-  brand: String | null,
-  batch: String | null,
   unit: "unit" | "ml" | "mg" | "g" | "capsule" | "tablet" | "vial" | "box",
   quantity: Number,
   lowStockThreshold: Number | null,
@@ -373,33 +459,34 @@ Collection: `inventory_items`
 }
 ```
 
+Escopo reduzido: não incluir fornecedor, custo, compra, depósito ou ERP.
+
 Validações:
 
-- quantidade >= 0;
-- threshold >= 0;
+- `quantity >= 0`;
+- `lowStockThreshold >= 0`;
 - nome obrigatório.
 
 Índices:
 
 ```js
-{ ownerId: 1, archivedAt: 1 }
-{ ownerId: 1, expirationDate: 1 }
+{ athleteId: 1, archivedAt: 1 }
+{ athleteId: 1, expirationDate: 1 }
 ```
 
-## 12. InventoryMovement
+## 14. InventoryMovement
 
 Collection: `inventory_movements`
 
 ```js
 {
   inventoryItemId: ObjectId,
-  ownerId: ObjectId,
+  athleteId: ObjectId,
   type: "in" | "out" | "adjustment",
   quantity: Number,
   previousQuantity: Number,
   resultingQuantity: Number,
   reason: String,
-  relatedTrackingRecordId: ObjectId | null,
   createdBy: ObjectId,
   createdAt: Date
 }
@@ -407,18 +494,20 @@ Collection: `inventory_movements`
 
 Regras:
 
-- quantidade > 0;
-- saída não pode gerar estoque negativo;
-- movimentação é imutável.
+- quantidade da movimentação > 0;
+- saída não gera estoque negativo;
+- movimentação imutável;
+- item vencido respeita bloqueios definidos no domínio;
+- alteração de quantidade ocorre via movimentação, não edição direta.
 
 Índices:
 
 ```js
 { inventoryItemId: 1, createdAt: -1 }
-{ ownerId: 1, createdAt: -1 }
+{ athleteId: 1, createdAt: -1 }
 ```
 
-## 13. Notification
+## 15. Notification
 
 Collection: `notifications`
 
@@ -431,6 +520,7 @@ Collection: `notifications`
   entityType: String | null,
   entityId: ObjectId | null,
   readAt: Date | null,
+  archivedAt: Date | null,
   createdAt: Date
 }
 ```
@@ -439,9 +529,10 @@ Collection: `notifications`
 
 ```js
 { userId: 1, readAt: 1, createdAt: -1 }
+{ userId: 1, archivedAt: 1, createdAt: -1 }
 ```
 
-## 14. AuditLog
+## 16. AuditLog
 
 Collection: `audit_logs`
 
@@ -460,7 +551,7 @@ Collection: `audit_logs`
 Regras:
 
 - somente aplicação escreve;
-- sem senha, token ou conteúdo sensível completo;
+- sem senha, token, PDF, exame completo ou documento profissional completo;
 - documento imutável.
 
 Índices:
@@ -468,12 +559,14 @@ Regras:
 ```js
 { entityType: 1, entityId: 1, createdAt: -1 }
 { actorId: 1, createdAt: -1 }
+{ action: 1, createdAt: -1 }
 ```
 
-## 15. Relacionamentos
+## 17. Relacionamentos principais
 
 ```text
 User (professional)
+  -> ProfessionalProfile
   -> ProfessionalAthleteLink
   -> User (athlete)
 
@@ -482,34 +575,39 @@ Protocol
   -> professionalId
   -> ProtocolVersion[]
 
-ProtocolVersion
-  -> Substance snapshots
-
 TrackingRecord
-  -> Protocol / ProtocolVersion
-  -> athlete / professional
-
-CheckIn, Exam, PhysicalProgress
   -> athlete
-  -> professional when applicable
+  -> professional
+  -> Protocol opcional
+
+CheckIn
+  -> athlete
+  -> professional
+  -> Protocol opcional
+
+Exam / PhysicalProgress
+  -> athlete
+  -> professional quando aplicável
 
 InventoryItem
-  -> owner
+  -> athlete
   -> InventoryMovement[]
 
 Notification
   -> user
+
+AuditLog
+  -> actor/entity
 ```
 
-## 16. Exclusão e cascata
+## 18. Preservação e arquivamento
 
 Não usar cascade delete automático para histórico.
 
 Ao desativar usuário:
 
-- bloquear login;
-- manter vínculos e histórico;
-- impedir criação de novos dados;
+- bloquear login/ações conforme regra;
+- manter perfis, vínculos e histórico;
 - não apagar protocolos, check-ins, exames ou auditoria.
 
 Ao desativar substância:
@@ -517,7 +615,12 @@ Ao desativar substância:
 - ocultar de novas seleções;
 - manter snapshots históricos.
 
-Ao excluir rascunho:
+Ao cancelar protocolo draft:
 
-- excluir versões de rascunho sem uso;
-- não excluir dados publicados.
+- preservar protocolo e versão inicial para rastreabilidade;
+- marcar `cancelled`.
+
+Ao arquivar exame, evolução ou estoque:
+
+- preservar referências e histórico;
+- não remover registros relacionados.

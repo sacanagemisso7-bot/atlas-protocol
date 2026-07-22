@@ -14,10 +14,16 @@ Autenticação:
 Authorization: Bearer <token>
 ```
 
-Content-Type:
+JSON:
 
 ```http
 Content-Type: application/json
+```
+
+Upload:
+
+```http
+Content-Type: multipart/form-data
 ```
 
 Paginação:
@@ -26,11 +32,14 @@ Paginação:
 ?page=1&limit=20
 ```
 
-Limite máximo: 100.
+- `page` inicia em 1;
+- `limit` padrão 20;
+- máximo 100;
+- ordenação: `sortBy` e `sortOrder=asc|desc`;
+- filtros de intervalo: `dateFrom` e `dateTo`;
+- ordenação padrão quando não especificada: `createdAt desc`.
 
-Ordenação padrão: `createdAt desc`.
-
-## 2. Respostas
+## 2. Envelope de resposta
 
 ### Sucesso
 
@@ -42,7 +51,7 @@ Ordenação padrão: `createdAt desc`.
 }
 ```
 
-### Paginação
+### Lista paginada
 
 ```json
 {
@@ -51,8 +60,8 @@ Ordenação padrão: `createdAt desc`.
   "meta": {
     "page": 1,
     "limit": 20,
-    "total": 1,
-    "totalPages": 1
+    "total": 0,
+    "totalPages": 0
   }
 }
 ```
@@ -79,16 +88,19 @@ Ordenação padrão: `createdAt desc`.
 
 - `200`: consulta ou alteração concluída;
 - `201`: recurso criado;
-- `204`: exclusão sem corpo;
-- `400`: payload ou parâmetro inválido;
+- `400`: payload, parâmetro ou arquivo inválido;
 - `401`: autenticação ausente ou inválida;
-- `403`: usuário autenticado sem permissão;
+- `403`: sem permissão;
 - `404`: recurso inexistente ou invisível ao usuário;
-- `409`: conflito de regra ou unicidade;
-- `422`: estado válido sintaticamente, mas operação não permitida pelo domínio;
+- `409`: conflito de regra/unicidade;
+- `422`: transição/estado não permitido;
 - `500`: erro interno.
 
-## 4. Códigos de erro
+A V1 não usa `DELETE` físico em dados de negócio.
+
+## 4. Códigos de erro principais
+
+### Gerais
 
 - `VALIDATION_ERROR`
 - `INVALID_OBJECT_ID`
@@ -99,24 +111,50 @@ Ordenação padrão: `createdAt desc`.
 - `USER_BLOCKED`
 - `FORBIDDEN`
 - `RESOURCE_NOT_FOUND`
+- `DUPLICATE_RESOURCE`
+- `INTERNAL_ERROR`
+
+### Usuários/profissionais
+
 - `EMAIL_ALREADY_EXISTS`
+- `PROFESSIONAL_VERIFICATION_REQUIRED`
+- `PROFESSIONAL_PENDING_APPROVAL`
+- `PROFESSIONAL_REJECTED`
+- `PROFESSIONAL_ALREADY_REVIEWED`
+- `INVALID_UPLOAD_TYPE`
+- `UPLOAD_TOO_LARGE`
+
+### Vínculos
+
 - `ACTIVE_LINK_ALREADY_EXISTS`
+- `PENDING_LINK_ALREADY_EXISTS`
 - `ATHLETE_LINK_REQUIRED`
+- `LINK_NOT_PENDING`
+- `LINK_NOT_ACTIVE`
+
+### Protocolos
+
 - `INVALID_STATE_TRANSITION`
 - `PROTOCOL_EMPTY`
 - `PROTOCOL_READ_ONLY`
+
+### Check-ins/tracking
+
 - `CHECKIN_ALREADY_EXISTS`
 - `CHECKIN_ALREADY_SUBMITTED`
+- `CHECKIN_NOT_SUBMITTED`
+
+### Estoque
+
 - `INVENTORY_INSUFFICIENT`
 - `INVENTORY_ITEM_EXPIRED`
-- `DUPLICATE_RESOURCE`
-- `INTERNAL_ERROR`
+- `INVENTORY_ITEM_ARCHIVED`
 
 ## 5. Auth
 
 ### POST `/auth/register`
 
-Cria usuário atleta. Criação de profissional e admin fica restrita ao administrador ou seed.
+Cadastro público de atleta.
 
 Request:
 
@@ -149,6 +187,52 @@ Response `201`:
 
 Erros: `VALIDATION_ERROR`, `EMAIL_ALREADY_EXISTS`.
 
+### POST `/auth/register-professional`
+
+Cadastro público de profissional com comprovação simulada para fins acadêmicos. A aprovação no sistema não certifica credencial profissional real.
+
+`multipart/form-data`:
+
+```text
+name: string
+email: string
+password: string
+document: PDF obrigatório
+```
+
+Response `201`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "user": {
+      "id": "ObjectId",
+      "name": "Profissional Teste",
+      "email": "profissional@example.com",
+      "role": "professional",
+      "active": true
+    },
+    "verification": {
+      "status": "pending",
+      "submittedAt": "2026-08-01T12:00:00.000Z"
+    },
+    "token": "jwt"
+  },
+  "message": "Cadastro enviado para análise."
+}
+```
+
+O token permite sessão e consulta do próprio status, mas não libera operações profissionais.
+
+Erros:
+
+- `VALIDATION_ERROR`
+- `EMAIL_ALREADY_EXISTS`
+- `PROFESSIONAL_VERIFICATION_REQUIRED`
+- `INVALID_UPLOAD_TYPE`
+- `UPLOAD_TOO_LARGE`
+
 ### POST `/auth/login`
 
 ```json
@@ -160,11 +244,37 @@ Erros: `VALIDATION_ERROR`, `EMAIL_ALREADY_EXISTS`.
 
 Response `200`: usuário seguro + token.
 
+Para profissional, incluir status de verificação:
+
+```json
+{
+  "success": true,
+  "data": {
+    "user": {
+      "id": "ObjectId",
+      "name": "Profissional Teste",
+      "email": "profissional@example.com",
+      "role": "professional",
+      "active": true,
+      "verificationStatus": "pending"
+    },
+    "token": "jwt"
+  }
+}
+```
+
+Profissional `pending` ou `rejected` pode autenticar para consultar situação, mas rotas profissionais retornam `403` com código apropriado.
+
 Erros: `INVALID_CREDENTIALS`, `USER_BLOCKED`.
 
 ### GET `/auth/me`
 
 Retorna usuário autenticado.
+
+Para profissional, inclui:
+
+- `verificationStatus`;
+- `rejectionReason` apenas quando aplicável ao próprio usuário.
 
 ### PATCH `/auth/password`
 
@@ -179,7 +289,9 @@ Retorna usuário autenticado.
 
 ### GET `/users`
 
-Admin. Filtros:
+Admin.
+
+Filtros:
 
 - `role`
 - `active`
@@ -192,9 +304,7 @@ Admin ou próprio usuário.
 
 ### PATCH `/users/:id`
 
-Admin ou próprio usuário.
-
-Campos do próprio usuário:
+Próprio usuário pode alterar campos básicos permitidos.
 
 ```json
 {
@@ -202,15 +312,7 @@ Campos do próprio usuário:
 }
 ```
 
-Campos administrativos:
-
-```json
-{
-  "name": "Nome",
-  "active": true,
-  "role": "professional"
-}
-```
+Admin pode alterar campos administrativos permitidos, sem usar este endpoint para aprovar profissional.
 
 ### PATCH `/users/:id/block`
 
@@ -222,20 +324,98 @@ Admin.
 }
 ```
 
-## 7. Links
+Não existe exclusão física de usuário.
 
-### POST `/links`
+## 7. Professional verification
 
-Admin no MVP.
+### GET `/professional-verifications`
+
+Admin.
+
+Filtros:
+
+- `status=pending|approved|rejected`
+- `search`
+- paginação
+
+### GET `/professional-verifications/me`
+
+Profissional autenticado.
+
+Retorna status próprio e metadados seguros.
+
+### GET `/professional-verifications/:id`
+
+Admin.
+
+Retorna dados necessários à análise. O acesso ao arquivo deve ser protegido conforme estratégia de storage.
+
+### PATCH `/professional-verifications/:id/approve`
+
+Admin.
+
+Sem payload obrigatório.
+
+Resultado:
+
+- `verificationStatus=approved`;
+- `reviewedAt`;
+- `reviewedBy`;
+- auditoria;
+- notificação interna.
+
+### PATCH `/professional-verifications/:id/reject`
+
+Admin.
 
 ```json
 {
-  "professionalId": "ObjectId",
-  "athleteId": "ObjectId"
+  "reason": "Documento inválido ou insuficiente."
 }
 ```
 
-Response `201`: vínculo `active`.
+Resultado:
+
+- `verificationStatus=rejected`;
+- motivo persistido;
+- auditoria;
+- notificação.
+
+## 8. Links
+
+### POST `/links`
+
+Profissional `approved` solicita vínculo.
+
+Request preferencial:
+
+```json
+{
+  "athleteEmail": "atleta@example.com"
+}
+```
+
+Response `201`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "ObjectId",
+    "professionalId": "ObjectId",
+    "athleteId": "ObjectId",
+    "status": "pending",
+    "requestedAt": "2026-08-01T12:00:00.000Z"
+  }
+}
+```
+
+Erros:
+
+- `RESOURCE_NOT_FOUND`
+- `PENDING_LINK_ALREADY_EXISTS`
+- `ACTIVE_LINK_ALREADY_EXISTS`
+- `PROFESSIONAL_PENDING_APPROVAL`
 
 ### GET `/links`
 
@@ -243,9 +423,40 @@ Response `201`: vínculo `active`.
 - profissional: próprios;
 - atleta: próprios.
 
-Filtros: `status`, `professionalId`, `athleteId`.
+Filtros:
+
+- `status`
+- `professionalId` admin only
+- `athleteId` admin/professional conforme escopo
+- paginação
+
+### GET `/links/:id`
+
+Respeita ownership/admin.
+
+### PATCH `/links/:id/accept`
+
+Somente atleta destinatário.
+
+`pending -> active`.
+
+### PATCH `/links/:id/reject`
+
+Somente atleta destinatário.
+
+`pending -> rejected`.
+
+Payload opcional:
+
+```json
+{
+  "reason": "Solicitação recusada."
+}
+```
 
 ### PATCH `/links/:id/end`
+
+Profissional do vínculo, atleta do vínculo ou admin quando justificado.
 
 ```json
 {
@@ -253,7 +464,11 @@ Filtros: `status`, `professionalId`, `athleteId`.
 }
 ```
 
-## 8. Substances
+`active -> ended`.
+
+Não existe delete nem reativação do mesmo registro.
+
+## 9. Substances
 
 ### GET `/substances`
 
@@ -263,16 +478,17 @@ Filtros:
 - `active`
 - `search`
 - `scope`
+- paginação
 
 ### POST `/substances`
 
-Admin ou profissional.
+Admin cria global; profissional `approved` pode criar privado.
 
 ```json
 {
-  "name": "Creatina",
-  "category": "supplement",
-  "description": "Item informativo.",
+  "name": "Item informativo",
+  "category": "other",
+  "description": "Descrição informativa.",
   "scope": "private"
 }
 ```
@@ -281,17 +497,19 @@ Admin ou profissional.
 
 ### PATCH `/substances/:id`
 
-Admin ou proprietário do item privado.
+Admin ou proprietário do item privado conforme permissões.
 
-### DELETE `/substances/:id`
+### PATCH `/substances/:id/deactivate`
 
-Desativação lógica. Response `204`.
+Desativação lógica.
 
-## 9. Protocols
+Não existe `DELETE /substances/:id` na V1.
+
+## 10. Protocols
 
 ### POST `/protocols`
 
-Profissional com vínculo ativo.
+Profissional `approved` com vínculo `active`.
 
 ```json
 {
@@ -322,43 +540,48 @@ Filtros:
 - `athleteId`
 - `professionalId`
 - `status`
-- `from`
-- `to`
+- `dateFrom`
+- `dateTo`
+- paginação
 
 Escopo aplicado automaticamente.
 
 ### GET `/protocols/:id`
 
-Retorna protocolo e versão atual.
+Retorna protocolo + versão atual.
 
 ### PATCH `/protocols/:id`
 
 Somente `draft`.
 
-Payload parcial:
+Payload parcial permitido conforme validator.
+
+### PATCH `/protocols/:id/status`
+
+Endpoint único de transição de status.
 
 ```json
 {
-  "title": "Novo título",
-  "objective": "Novo objetivo",
-  "startDate": "2026-08-02T00:00:00.000Z",
-  "items": []
+  "status": "active",
+  "reason": "Motivo opcional conforme transição."
 }
 ```
 
-### DELETE `/protocols/:id`
+Transições válidas:
 
-Somente rascunho nunca ativado. Response `204`.
+```text
+draft -> active | cancelled
+active -> paused | closed
+paused -> active | closed
+```
 
-### POST `/protocols/:id/activate`
-
-Sem payload obrigatório.
+Status `closed` e `cancelled` são finais.
 
 Erros: `PROTOCOL_EMPTY`, `ATHLETE_LINK_REQUIRED`, `INVALID_STATE_TRANSITION`.
 
 ### POST `/protocols/:id/versions`
 
-Cria nova versão para protocolo ativo ou pausado.
+Cria nova versão para protocolo `active` ou `paused`.
 
 ```json
 {
@@ -374,42 +597,32 @@ Cria nova versão para protocolo ativo ou pausado.
 
 ### GET `/protocols/:id/versions/:version`
 
-### POST `/protocols/:id/pause`
+Não existe delete físico de protocolo.
 
-```json
-{
-  "reason": "Pausa temporária."
-}
-```
+## 11. Tracking records
 
-### POST `/protocols/:id/resume`
+Nome de rota oficial: `/tracking-records`.
 
-### POST `/protocols/:id/close`
+Campo oficial: `scheduledFor`.
 
-```json
-{
-  "reason": "Acompanhamento encerrado."
-}
-```
-
-### POST `/protocols/:id/cancel`
-
-Somente rascunho.
-
-## 10. Tracking records
+Filtros oficiais: `dateFrom` e `dateTo`.
 
 ### POST `/tracking-records`
 
-Profissional ou atleta quando permitido.
+Profissional vinculado ou atleta quando permitido.
 
 ```json
 {
   "athleteId": "ObjectId",
-  "title": "Registro manual",
+  "protocolId": "ObjectId",
+  "type": "manual",
+  "title": "Registro de acompanhamento",
   "scheduledFor": "2026-08-05T11:00:00.000Z",
   "notes": "Observação opcional."
 }
 ```
+
+`protocolId` é opcional.
 
 ### GET `/tracking-records`
 
@@ -418,39 +631,46 @@ Filtros:
 - `athleteId`
 - `protocolId`
 - `status`
-- `from`
-- `to`
+- `type`
+- `dateFrom`
+- `dateTo`
+- paginação
+- ordenação
 
 ### GET `/tracking-records/:id`
 
-### POST `/tracking-records/:id/complete`
+### PATCH `/tracking-records/:id/status`
+
+Transição única por endpoint.
+
+Exemplo conclusão:
 
 ```json
 {
+  "status": "completed",
   "completedAt": "2026-08-05T11:10:00.000Z",
   "notes": "Registro concluído."
 }
 ```
 
-### POST `/tracking-records/:id/miss`
+Exemplo perdido/cancelado:
 
 ```json
 {
+  "status": "missed",
   "reason": "Não realizado."
 }
 ```
 
-### POST `/tracking-records/:id/cancel`
+Transições válidas:
 
-```json
-{
-  "reason": "Cancelado."
-}
+```text
+scheduled -> completed | missed | cancelled
 ```
 
 ### PATCH `/tracking-records/:id/correction`
 
-Profissional ou admin, com auditoria.
+Admin ou profissional autorizado, apenas para correção auditada de registro finalizado.
 
 ```json
 {
@@ -459,7 +679,9 @@ Profissional ou admin, com auditoria.
 }
 ```
 
-## 11. Check-ins
+Não existe delete físico.
+
+## 12. Check-ins
 
 ### POST `/check-ins`
 
@@ -467,37 +689,44 @@ Atleta.
 
 ```json
 {
+  "protocolId": "ObjectId",
   "referenceWeek": "2026-08-03T00:00:00.000Z",
-  "answers": {
-    "weightKg": 80.5,
-    "sleepHours": 7.5,
-    "energyScore": 8,
-    "adherenceScore": 9,
-    "reportedEffects": ["Observação relatada"],
-    "notes": "Semana estável."
+  "responses": {
+    "notes": "Registro semanal."
   }
 }
 ```
 
-Pode criar diretamente como rascunho `pending`.
+`protocolId` opcional.
+
+Cria `pending`.
 
 ### GET `/check-ins`
 
-Filtros: `athleteId`, `status`, `from`, `to`.
+Filtros:
+
+- `athleteId`
+- `protocolId`
+- `status`
+- `dateFrom`
+- `dateTo`
+- paginação
 
 ### GET `/check-ins/:id`
 
 ### PATCH `/check-ins/:id`
 
-Atleta, apenas `pending`.
+Atleta dono, apenas enquanto `pending`.
 
-### POST `/check-ins/:id/submit`
+### PATCH `/check-ins/:id/submit`
 
-Muda para `submitted`.
+Atleta dono.
 
-### POST `/check-ins/:id/review`
+`pending -> submitted`.
 
-Profissional vinculado.
+### PATCH `/check-ins/:id/review`
+
+Profissional `approved` e vinculado.
 
 ```json
 {
@@ -505,55 +734,74 @@ Profissional vinculado.
 }
 ```
 
-### POST `/check-ins/:id/reopen`
+`submitted -> reviewed`.
 
-Admin ou profissional vinculado.
+Não existe endpoint de reabertura na V1.
 
-```json
-{
-  "reason": "Correção solicitada."
-}
-```
+Não existe delete físico.
 
-## 12. Exams
+## 13. Exams
 
 ### POST `/exams`
 
-```json
-{
-  "athleteId": "ObjectId",
-  "title": "Exame de acompanhamento",
-  "examDate": "2026-08-01T00:00:00.000Z",
-  "laboratory": "Laboratório exemplo",
-  "results": [
-    {
-      "marker": "Marcador",
-      "value": "10",
-      "unit": "unidade",
-      "referenceRange": "informado pelo laboratório"
-    }
-  ],
-  "notes": "Sem interpretação automática."
-}
+Atleta próprio ou profissional vinculado.
+
+Pode aceitar `multipart/form-data` para suportar PDF.
+
+Campos:
+
+```text
+athleteId: ObjectId quando necessário e autorizado
+title: string
+examDate: ISO 8601
+laboratory: string opcional
+notes: string opcional
+results: JSON serializado opcional
+document: PDF opcional
 ```
+
+Exemplo de `results`:
+
+```json
+[
+  {
+    "marker": "Marcador",
+    "value": "10",
+    "unit": "unidade",
+    "referenceRange": "informado pelo laboratório"
+  }
+]
+```
+
+O backend não interpreta resultados.
 
 ### GET `/exams`
 
-Filtros: `athleteId`, `from`, `to`, `archived`.
+Filtros:
+
+- `athleteId`
+- `dateFrom`
+- `dateTo`
+- `archived`
+- paginação
 
 ### GET `/exams/:id`
 
 ### PATCH `/exams/:id`
 
-Atualiza metadados permitidos.
+Atualiza metadados permitidos e, se previsto, substitui documento preservando auditoria.
 
-### DELETE `/exams/:id`
+### PATCH `/exams/:id/archive`
 
-Arquiva. Response `204`.
+Arquiva logicamente.
 
-## 13. Physical progress
+Não existe delete físico.
+
+## 14. Physical progress
 
 ### POST `/progress`
+
+Atleta próprio ou profissional vinculado.
 
 ```json
 {
@@ -572,27 +820,77 @@ Arquiva. Response `204`.
 
 ### GET `/progress`
 
-Filtros: `athleteId`, `from`, `to`.
+Filtros:
+
+- `athleteId`
+- `dateFrom`
+- `dateTo`
+- `archived`
+- paginação
 
 ### GET `/progress/:id`
 
 ### PATCH `/progress/:id`
 
-### DELETE `/progress/:id`
+### PATCH `/progress/:id/archive`
 
 Arquivamento lógico.
 
-## 14. Inventory
+Não existe delete físico.
+
+## 15. History / timeline
+
+### GET `/history`
+
+Timeline agregada.
+
+Filtros:
+
+- `athleteId` quando permitido;
+- `type` opcional;
+- `dateFrom`;
+- `dateTo`;
+- paginação.
+
+Exemplo:
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "id": "event-id",
+      "type": "protocol_version",
+      "occurredAt": "2026-08-01T12:00:00.000Z",
+      "title": "Nova versão de protocolo",
+      "summary": "Versão 2 registrada.",
+      "entityId": "ObjectId"
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "limit": 20,
+    "total": 1,
+    "totalPages": 1
+  }
+}
+```
+
+A timeline é leitura derivada e não altera entidades-fonte.
+
+## 16. Inventory
+
+Estoque simples de propriedade do atleta.
 
 ### POST `/inventory`
+
+Atleta.
 
 ```json
 {
   "substanceId": "ObjectId",
-  "name": "Produto cadastrado",
-  "brand": "Marca",
-  "batch": "L001",
-  "unit": "vial",
+  "name": "Item cadastrado",
+  "unit": "unit",
   "quantity": 3,
   "lowStockThreshold": 1,
   "expirationDate": "2027-01-01T00:00:00.000Z"
@@ -601,15 +899,29 @@ Arquivamento lógico.
 
 ### GET `/inventory`
 
-Filtros: `search`, `expired`, `lowStock`, `archived`.
+- atleta: próprio;
+- profissional: atleta vinculado, somente leitura.
+
+Filtros:
+
+- `athleteId` para profissional autorizado;
+- `search`;
+- `expired`;
+- `lowStock`;
+- `archived`;
+- paginação.
 
 ### GET `/inventory/:id`
 
 ### PATCH `/inventory/:id`
 
-Não alterar quantidade diretamente. Quantidade muda por movimentação.
+Atleta dono.
+
+Atualiza metadados, nunca quantidade diretamente.
 
 ### POST `/inventory/:id/movements`
+
+Atleta dono.
 
 ```json
 {
@@ -619,59 +931,109 @@ Não alterar quantidade diretamente. Quantidade muda por movimentação.
 }
 ```
 
-Erros: `INVENTORY_INSUFFICIENT`, `INVENTORY_ITEM_EXPIRED`.
+Erros:
+
+- `INVENTORY_INSUFFICIENT`
+- `INVENTORY_ITEM_EXPIRED`
+- `INVENTORY_ITEM_ARCHIVED`
 
 ### GET `/inventory/:id/movements`
 
-### DELETE `/inventory/:id`
+Atleta dono ou profissional vinculado em leitura.
 
-Arquiva.
+### PATCH `/inventory/:id/archive`
 
-## 15. Notifications
+Atleta dono.
+
+Não existe delete físico.
+
+## 17. Notifications
 
 ### GET `/notifications`
 
-Filtros: `read`, paginação.
+Próprias.
+
+Filtros:
+
+- `read`
+- `archived`
+- paginação
 
 ### PATCH `/notifications/:id/read`
 
+Marca própria como lida.
+
 ### PATCH `/notifications/read-all`
 
-### DELETE `/notifications/:id`
+Marca todas próprias como lidas.
 
-Remove apenas da visualização do usuário, sem apagar auditoria relacionada.
+### PATCH `/notifications/:id/archive`
 
-## 16. Dashboards
+Oculta/arquiva para o usuário.
 
-### GET `/dashboard/admin`
+Não existe criação manual pelo cliente nem delete físico.
 
-Cards:
+## 18. Dashboard
 
-- usuários por perfil;
-- usuários ativos;
-- vínculos ativos;
-- protocolos por status.
+### GET `/dashboard`
 
-### GET `/dashboard/professional`
+Endpoint único autenticado.
 
-Cards:
+O backend determina a resposta por `role`.
 
-- atletas vinculados;
-- check-ins aguardando revisão;
-- protocolos ativos;
-- registros atrasados.
+### Athlete
 
-### GET `/dashboard/athlete`
+Exemplo conceitual:
 
-Cards:
+```json
+{
+  "success": true,
+  "data": {
+    "role": "athlete",
+    "activeProtocol": {},
+    "nextTracking": {},
+    "currentCheckIn": {},
+    "recentActivity": [],
+    "unreadNotifications": 2,
+    "inventoryAlerts": []
+  }
+}
+```
 
-- protocolo atual;
-- próximos registros;
-- check-in da semana;
-- notificações não lidas;
-- itens de estoque baixo.
+### Professional
 
-## 17. Audit
+```json
+{
+  "success": true,
+  "data": {
+    "role": "professional",
+    "athleteCount": 8,
+    "activeProtocols": 6,
+    "pendingCheckIns": 3,
+    "upcomingTrackings": [],
+    "recentActivity": []
+  }
+}
+```
+
+Somente profissional `approved` recebe dashboard profissional completo.
+
+### Admin
+
+```json
+{
+  "success": true,
+  "data": {
+    "role": "admin",
+    "users": {},
+    "professionalsPending": 2,
+    "activeLinks": 10,
+    "recentAudit": []
+  }
+}
+```
+
+## 19. Audit
 
 ### GET `/audit-logs`
 
@@ -683,35 +1045,73 @@ Filtros:
 - `entityType`
 - `entityId`
 - `action`
-- `from`
-- `to`
+- `dateFrom`
+- `dateTo`
+- paginação
 
-## 18. Health
+Audit logs não podem ser criados/alterados via API pública comum.
+
+## 20. Health
 
 ### GET `/health`
 
 Público.
-
-Response:
 
 ```json
 {
   "success": true,
   "data": {
     "status": "ok",
-    "timestamp": "2026-07-17T22:00:00.000Z"
+    "timestamp": "2026-08-01T12:00:00.000Z"
   }
 }
 ```
 
-## 19. Validação transversal
+## 21. Validação transversal
 
 - ObjectId inválido: `400 INVALID_OBJECT_ID`;
-- recurso fora do escopo do usuário: preferir `404`;
-- e-mail sempre normalizado;
+- recurso fora do escopo: preferir `404` quando apropriado para não vazar existência;
+- e-mail normalizado;
 - strings com trim;
-- campos desconhecidos rejeitados nos validators;
+- campos desconhecidos rejeitados;
 - datas ISO 8601;
 - paginação normalizada;
-- filtros não autorizados ignorados ou rejeitados;
-- IDs de ownership nunca confiados sem verificação.
+- `dateFrom <= dateTo`;
+- IDs de ownership nunca confiados sem verificação;
+- profissional deve estar `approved` antes de operações profissionais;
+- vínculo `active` obrigatório quando acessar atleta;
+- uploads validados por MIME, tamanho e autorização;
+- PDF/documentos não entram em logs ou respostas desnecessárias.
+
+## 22. Rotas removidas/substituídas em relação à documentação antiga
+
+Não implementar na V1:
+
+```text
+DELETE /protocols/:id
+DELETE /substances/:id
+DELETE /exams/:id
+DELETE /progress/:id
+DELETE /inventory/:id
+DELETE /notifications/:id
+POST /check-ins/:id/reopen
+GET /dashboard/admin
+GET /dashboard/professional
+GET /dashboard/athlete
+POST /tracking-records/:id/complete
+POST /tracking-records/:id/miss
+POST /tracking-records/:id/cancel
+```
+
+Substituições:
+
+```text
+protocol delete -> PATCH /protocols/:id/status com cancelled quando draft
+substance delete -> PATCH /substances/:id/deactivate
+exam delete -> PATCH /exams/:id/archive
+progress delete -> PATCH /progress/:id/archive
+inventory delete -> PATCH /inventory/:id/archive
+notification delete -> PATCH /notifications/:id/archive
+tracking transitions -> PATCH /tracking-records/:id/status
+dashboards por role -> GET /dashboard
+```

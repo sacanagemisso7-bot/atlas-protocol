@@ -2,13 +2,15 @@
 
 ## 1. Legenda
 
-- **T**: todos os registros permitidos.
-- **V**: apenas atletas vinculados.
-- **P**: apenas registros próprios.
+- **T**: permitido em todos os registros do escopo administrativo.
+- **V**: permitido apenas para atletas com vínculo `active`.
+- **P**: permitido apenas em registros próprios.
 - **N**: não permitido.
 - **C**: permitido com condição adicional.
 
-A autorização deve ser aplicada no backend.
+Autorização é sempre aplicada no backend.
+
+Profissional só exerce permissões profissionais quando `verificationStatus=approved`.
 
 ## 2. Usuários
 
@@ -19,165 +21,222 @@ A autorização deve ser aplicada no backend.
 | Atualizar próprio perfil | P | P | P |
 | Atualizar perfil de outro usuário | T | N | N |
 | Bloquear/desbloquear usuário | T | N | N |
-| Alterar perfil | T | N | N |
+| Alterar role manualmente | C | N | N |
 | Excluir fisicamente | N | N | N |
 
-## 3. Vínculos profissional-atleta
+Regra: role não pode ser promovida silenciosamente via payload do próprio usuário.
+
+## 3. Cadastro e verificação profissional
 
 | Ação | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
-| Criar vínculo | T | C | N |
+| Cadastro público como profissional | N/A | P | N |
+| Enviar documento de verificação próprio | N/A | P | N |
+| Ver status de verificação próprio | T | P | N |
+| Listar profissionais pendentes | T | N | N |
+| Aprovar profissional | T | N | N |
+| Rejeitar profissional | T | N | N |
+| Ver documento comprobatório | T | P próprio | N |
+| Excluir documento/histórico fisicamente | N | N | N |
+
+Profissional `pending` ou `rejected` pode consultar sua situação, mas não acessar recursos profissionais. A aprovação é uma simulação acadêmica e não certifica credencial real.
+
+## 4. Vínculos profissional-atleta
+
+| Ação | Admin | Profissional | Atleta |
+|---|---:|---:|---:|
+| Solicitar vínculo | N | C | N |
 | Listar vínculos | T | P | P |
 | Ver vínculo | T | P | P |
-| Aceitar convite | N | N | P |
-| Encerrar vínculo | T | P | P |
-| Reativar vínculo encerrado | T | N | N |
+| Aceitar solicitação | N | N | P |
+| Rejeitar solicitação | N | N | P |
+| Encerrar vínculo ativo | C | P | P |
+| Reativar vínculo encerrado | N | N | N |
+| Excluir fisicamente | N | N | N |
 
-Condição para profissional criar vínculo: fluxo de convite habilitado. No MVP simplificado, use apenas criação por administrador.
+Condições:
 
-## 4. Biblioteca de substâncias
+- profissional solicitante deve estar `approved`;
+- atleta só aceita/rejeita solicitação destinada a ele;
+- dados do atleta só ficam acessíveis ao profissional após `active`.
+
+## 5. Biblioteca de substâncias/itens
 
 | Ação | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
 | Listar itens ativos | T | T | T |
 | Ver item | T | T | T |
-| Criar item | T | T | N |
-| Atualizar item próprio | T | P | N |
-| Desativar item | T | P | N |
+| Criar item global | T | N | N |
+| Criar item privado | N | P | N |
+| Atualizar item global | T | N | N |
+| Atualizar item privado próprio | T | P | N |
+| Desativar item | T | P próprio | N |
 | Excluir fisicamente | N | N | N |
 
-Itens globais criados pelo admin não podem ser alterados por profissional.
-
-## 5. Protocolos
+## 6. Protocolos
 
 | Ação | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
-| Listar | T | V | P |
-| Ver detalhes | T | V | P |
+| Listar | C | V | P |
+| Ver detalhes | C | V | P |
 | Criar | N | V | N |
 | Editar rascunho | N | V | N |
-| Excluir rascunho | N | V | N |
+| Cancelar rascunho | N | V | N |
 | Ativar | N | V | N |
 | Criar nova versão | N | V | N |
 | Pausar | N | V | N |
 | Retomar | N | V | N |
 | Encerrar | N | V | N |
-| Cancelar rascunho | N | V | N |
 | Alterar protocolo encerrado | N | N | N |
+| Excluir fisicamente | N | N | N |
 
-Admin pode consultar para suporte e auditoria, mas não cria nem altera protocolo no MVP.
+Admin pode consultar apenas quando necessário para suporte/auditoria, sem editar conteúdo.
 
-## 6. Registros de acompanhamento
+## 7. Registros de acompanhamento
 
 | Ação | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
-| Listar | T | V | P |
-| Ver | T | V | P |
+| Listar | C | V | P |
+| Ver | C | V | P |
 | Criar manualmente | N | V | C |
-| Marcar como concluído | N | V | P |
-| Marcar como perdido | N | V | P |
-| Cancelar agendado | N | V | P |
-| Editar concluído | C | C | N |
+| Marcar `completed` | N | V | P |
+| Marcar `missed` | N | V | C |
+| Marcar `cancelled` | N | V | C |
+| Corrigir registro finalizado | C | C | N |
 | Excluir fisicamente | N | N | N |
 
-Atleta só cria manualmente quando o tipo permitir. Correção de concluído exige auditoria.
+Correção de registro finalizado exige auditoria.
 
-## 7. Check-ins
+## 8. Check-ins
 
 | Ação | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
-| Listar | T | V | P |
-| Ver | T | V | P |
-| Criar rascunho | N | N | P |
+| Listar | C | V | P |
+| Ver | C | V | P |
+| Criar `pending` | N | N | P |
+| Editar enquanto `pending` | N | N | P |
 | Enviar | N | N | P |
-| Revisar | N | V | N |
-| Reabrir | T | V | N |
+| Revisar `submitted` | N | V | N |
+| Reabrir | N | N | N |
 | Excluir fisicamente | N | N | N |
 
-## 8. Exames
+Após `submitted`, respostas do atleta são imutáveis na V1.
+
+## 9. Exames
 
 | Ação | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
-| Listar | T | V | P |
-| Ver | T | V | P |
+| Listar | C | V | P |
+| Ver | C | V | P |
 | Cadastrar | N | V | P |
-| Atualizar metadados | N | V | P |
-| Arquivar | T | V | P |
+| Fazer upload de PDF | N | V | P |
+| Atualizar metadados permitidos | N | V | P |
+| Arquivar | C | V | P |
 | Excluir definitivamente | N | N | N |
 
-## 9. Evolução física
+Admin não altera conteúdo clínico; acesso administrativo deve ser excepcional e auditável.
+
+## 10. Evolução física e histórico
 
 | Ação | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
-| Listar | T | V | P |
-| Ver | T | V | P |
-| Criar | N | V | P |
-| Atualizar | N | V | P |
-| Arquivar | T | V | P |
+| Listar evolução | C | V | P |
+| Ver registro | C | V | P |
+| Criar registro | N | V | P |
+| Atualizar registro permitido | N | V | P |
+| Arquivar | C | V | P |
+| Ver timeline histórica | C | V | P |
+| Excluir fisicamente | N | N | N |
 
-## 10. Estoque
+Timeline é somente leitura e derivada dos registros-fonte.
+
+## 11. Estoque simples
 
 | Ação | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
-| Listar estoque próprio | P | P | P |
-| Ver item próprio | P | P | P |
-| Criar item próprio | P | P | P |
-| Atualizar item próprio | P | P | P |
-| Registrar movimentação | P | P | P |
-| Ver estoque de outro usuário | N | N | N |
+| Listar estoque do atleta | N | V | P |
+| Ver item | N | V | P |
+| Criar item | N | N | P |
+| Atualizar metadados do item | N | N | P |
+| Registrar entrada/saída/ajuste | N | N | P |
+| Ver movimentações | N | V | P |
+| Arquivar item | N | N | P |
+| Excluir fisicamente | N | N | N |
 
-No MVP, estoque é individual. Estoque compartilhado de clínica fica fora do escopo.
+Profissional possui leitura apenas do estoque de atleta com vínculo `active`.
 
-## 11. Notificações
+## 12. Notificações
 
 | Ação | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
 | Listar próprias | P | P | P |
 | Marcar própria como lida | P | P | P |
-| Excluir própria | P | P | P |
+| Marcar todas próprias como lidas | P | P | P |
+| Arquivar/ocultar própria | P | P | P |
 | Criar manualmente | N | N | N |
+| Excluir fisicamente | N | N | N |
 
 Notificações são geradas pelo sistema.
 
-## 12. Dashboard
+## 13. Dashboard
 
-| Dashboard | Admin | Profissional | Atleta |
+Existe um único endpoint backend: `GET /dashboard`.
+
+| Conteúdo retornado | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
-| Administrativo | T | N | N |
-| Profissional | N | P | N |
-| Atleta | N | N | P |
+| Visão administrativa | P | N | N |
+| Visão profissional | N | P | N |
+| Visão atleta | N | N | P |
 
-## 13. Auditoria
+O backend escolhe a resposta pela role autenticada.
+
+## 14. Auditoria
 
 | Ação | Admin | Profissional | Atleta |
 |---|---:|---:|---:|
 | Consultar logs gerais | T | N | N |
-| Consultar evento relacionado ao próprio vínculo | T | C | C |
-| Criar/alterar/excluir log | N | N | N |
+| Consultar evento exposto em histórico próprio | C | C | C |
+| Criar log manualmente | N | N | N |
+| Alterar log | N | N | N |
+| Excluir log | N | N | N |
 
-## 14. Regras de implementação
+AuditLog é escrito somente pela aplicação.
 
-Toda rota privada deve combinar:
+## 15. Uploads
+
+| Ação | Admin | Profissional | Atleta |
+|---|---:|---:|---:|
+| Upload comprovação profissional | N/A | P | N |
+| Visualizar comprovação para análise | T | P próprio | N |
+| Upload PDF de exame | N | V | P |
+| Excluir arquivo de histórico definitivamente | N | N | N |
+
+Arquivos exigem validação de MIME, tamanho, autorização e storage seguro.
+
+## 16. Regras de implementação
+
+Toda rota privada combina, quando aplicável:
 
 1. autenticação;
-2. perfil;
-3. ownership ou vínculo;
-4. estado do recurso;
-5. validação da operação.
+2. aprovação profissional, se role `professional`;
+3. role;
+4. ownership ou vínculo `active`;
+5. estado do recurso;
+6. validação da operação.
 
 Exemplo:
 
 ```text
-PATCH /protocols/:id/activate
+PATCH /protocols/:id/status
   -> auth
   -> role professional
+  -> verify professional approved
   -> validate ObjectId
   -> load protocol
-  -> verify professional ownership
   -> verify active link
-  -> verify status draft
-  -> verify protocol completeness
-  -> activate
+  -> verify current state
+  -> apply transition
+  -> audit
 ```
 
-Não confiar em `professionalId` ou `athleteId` enviados pelo cliente sem comparar com o usuário autenticado.
+Nunca confiar em `professionalId`, `athleteId`, `role` ou status enviados pelo cliente sem validação contra o usuário autenticado e o estado persistido.

@@ -2,19 +2,20 @@
 
 ## 1. Escopo do domínio
 
-O sistema permite:
+O Atlas Protocol permite:
 
-- cadastro e autenticação de usuários;
+- cadastro e autenticação de atletas e profissionais;
+- comprovação e aprovação de profissionais;
 - vínculo entre profissional e atleta;
-- criação e acompanhamento de protocolos;
-- versionamento de protocolos;
+- criação e versionamento de protocolos;
 - registros de acompanhamento;
 - check-ins periódicos;
-- armazenamento de resultados de exames;
+- armazenamento de exames e PDFs;
 - registro de evolução física;
-- controle administrativo de estoque;
+- timeline histórica agregada;
+- estoque simples individual;
 - notificações internas;
-- dashboard por perfil;
+- dashboards por perfil;
 - auditoria de alterações relevantes.
 
 O sistema não:
@@ -22,137 +23,143 @@ O sistema não:
 - prescreve;
 - recomenda substâncias;
 - calcula dose ideal;
-- sugere correções;
+- sugere correções clínicas;
 - diagnostica;
 - interpreta exames automaticamente;
 - substitui acompanhamento profissional.
 
 ## 2. Perfis
 
+Perfis válidos:
+
 - `admin`
 - `professional`
 - `athlete`
 
-Um usuário possui exatamente um perfil no MVP.
+Um usuário possui exatamente um perfil na V1.
+
+### DR-001 — Cadastro de atleta
+
+Cadastro público de atleta cria usuário com:
+
+- `role = athlete`;
+- conta ativa, salvo bloqueio administrativo posterior.
+
+### DR-002 — Cadastro de profissional
+
+Cadastro público de profissional exige:
+
+- nome;
+- e-mail;
+- senha;
+- upload de documento comprobatório em PDF.
+
+O usuário é criado com:
+
+- `role = professional`;
+- `verificationStatus = pending`.
+
+Profissional `pending` pode autenticar, mas não exerce permissões profissionais.
+
+### DR-003 — Aprovação profissional
+
+Somente admin pode:
+
+- aprovar profissional;
+- rejeitar profissional;
+- registrar motivo de rejeição.
+
+Estados de verificação:
+
+- `pending`
+- `approved`
+- `rejected`
+
+Somente `approved` pode exercer permissões profissionais.
+
+### DR-004 — Documento profissional
+
+O fluxo de comprovação é demonstrativo para fins acadêmicos e não certifica credencial médica ou profissional real.
+
+O documento comprobatório:
+
+- deve ser PDF;
+- deve passar por validação de tipo e tamanho;
+- não deve ser exposto publicamente;
+- não deve ser gravado em logs ou auditoria em conteúdo completo.
 
 ## 3. Vínculo profissional-atleta
 
-### DR-001 — Vínculo obrigatório
-
-Um profissional só pode acessar dados de um atleta quando existir vínculo ativo entre ambos.
-
-### DR-002 — Criação do vínculo
-
-O vínculo pode ser criado:
-
-- por administrador; ou
-- por profissional, mediante aceite do atleta, se o fluxo de convite estiver implementado.
-
-No MVP simplificado, o administrador pode criar e ativar o vínculo diretamente.
-
-### DR-003 — Encerramento do vínculo
-
-Encerrar o vínculo impede novos acessos e alterações do profissional, mas não apaga histórico.
-
-### DR-004 — Histórico preservado
-
-Protocolos, respostas, check-ins e demais registros criados durante o vínculo permanecem armazenados.
-
-## 4. Protocolos
-
 Estados:
 
-- `draft`
+- `pending`
 - `active`
-- `paused`
-- `closed`
-- `cancelled`
+- `rejected`
+- `ended`
 
-### DR-005 — Criação
+### DR-005 — Vínculo obrigatório
 
-Somente profissional vinculado ao atleta pode criar protocolo.
+Um profissional só pode acessar dados de acompanhamento de um atleta quando:
 
-### DR-006 — Rascunho
+- o profissional está `approved`;
+- existe vínculo `active` entre ambos.
 
-Protocolo em `draft`:
+### DR-006 — Solicitação de vínculo
 
-- pode ser editado;
-- pode ter itens adicionados ou removidos;
-- pode ser excluído permanentemente se nunca foi ativado;
-- não gera registros de acompanhamento.
+Somente profissional `approved` pode solicitar vínculo.
 
-### DR-007 — Ativação
+A solicitação pode localizar o atleta por e-mail ou identificador resolvido no backend.
 
-Só pode ativar um protocolo que:
+Ao criar solicitação:
 
-- esteja em `draft`;
-- tenha atleta e profissional válidos;
-- tenha pelo menos um item;
-- tenha data inicial;
-- não tenha data final anterior à inicial.
+- status inicial = `pending`;
+- o atleta recebe notificação interna;
+- não há acesso aos dados do atleta enquanto estiver `pending`.
 
-### DR-008 — Protocolo ativo
+### DR-007 — Aceite do atleta
 
-Protocolo em `active`:
+Somente o atleta destinatário pode aceitar vínculo `pending`.
 
-- fica visível ao atleta;
-- não pode ser editado diretamente;
-- mudanças geram nova versão;
-- pode ser pausado ou encerrado.
+Ao aceitar:
 
-### DR-009 — Versionamento
+- status = `active`;
+- registrar `acceptedAt`;
+- gerar auditoria;
+- gerar notificação para o profissional.
 
-Toda mudança material em protocolo ativo cria uma nova versão.
+### DR-008 — Rejeição do atleta
 
-Mudanças materiais incluem:
+Somente o atleta destinatário pode rejeitar vínculo `pending`.
 
-- inclusão ou remoção de item;
-- alteração de frequência;
-- alteração de período;
-- alteração de observações operacionais relevantes.
+Ao rejeitar:
 
-A versão anterior permanece imutável.
+- status = `rejected`;
+- registrar `rejectedAt`;
+- não liberar acesso ao profissional;
+- preservar o registro da solicitação.
 
-### DR-010 — Pausa
+### DR-009 — Encerramento do vínculo
 
-Protocolo `active` pode virar `paused`.
+Vínculo `active` pode virar `ended` por ação autorizada.
 
-Durante a pausa:
+Encerramento:
 
-- registros futuros ficam suspensos;
-- histórico anterior permanece;
-- o protocolo pode voltar para `active`;
-- a retomada não apaga a pausa.
+- impede novos acessos e alterações do profissional;
+- não apaga histórico criado durante o vínculo;
+- registra `endedAt` e motivo opcional;
+- gera auditoria e notificações.
 
-### DR-011 — Encerramento
+### DR-010 — Unicidade lógica
 
-Protocolo `active` ou `paused` pode virar `closed`.
+Não pode existir mais de um vínculo `pending` ou `active` para o mesmo par profissional-atleta.
 
-Após encerrado:
+Novo vínculo após `rejected` ou `ended` deve gerar novo registro, preservando o histórico anterior.
 
-- fica somente leitura;
-- não pode ser reaberto no MVP;
-- não aceita novos registros vinculados, exceto observação administrativa de encerramento;
-- histórico permanece disponível.
+## 4. Biblioteca de substâncias/itens
 
-### DR-012 — Cancelamento
+### DR-011 — Escopo informativo
 
-Somente protocolo em `draft` pode virar `cancelled`.
-
-Protocolos ativados não são cancelados; são encerrados.
-
-### DR-013 — Datas
-
-- datas são persistidas em UTC;
-- `endDate` não pode ser anterior a `startDate`;
-- protocolo sem `endDate` é permitido apenas quando explicitamente definido como contínuo;
-- o MVP não calcula datas clínicas ou recomenda duração.
-
-## 5. Itens de protocolo
-
-### DR-014 — Biblioteca
-
-Um item referencia uma entrada da biblioteca de substâncias/produtos.
+A biblioteca serve para catalogar itens referenciados por protocolos e estoque.
 
 Categorias permitidas:
 
@@ -163,13 +170,122 @@ Categorias permitidas:
 - `medication`
 - `other`
 
-### DR-015 — Informação operacional
+### DR-012 — Informação operacional
 
 O sistema pode armazenar informação inserida pelo profissional para acompanhamento, mas não gera recomendação automática.
 
-### DR-016 — Imutabilidade histórica
+### DR-013 — Desativação
 
-Excluir ou desativar item da biblioteca não pode apagar seu nome e categoria das versões históricas. Cada versão deve manter snapshot mínimo.
+Itens não são excluídos fisicamente.
+
+Ao desativar:
+
+- deixam de aparecer em novas seleções, quando aplicável;
+- snapshots históricos permanecem intactos.
+
+## 5. Protocolos
+
+Estados:
+
+- `draft`
+- `active`
+- `paused`
+- `closed`
+- `cancelled`
+
+### DR-014 — Criação
+
+Somente profissional `approved` com vínculo `active` pode criar protocolo para o atleta.
+
+Protocolo nasce em `draft` e cria versão inicial 1.
+
+### DR-015 — Rascunho
+
+Protocolo `draft`:
+
+- pode ser editado;
+- pode ter itens adicionados ou removidos;
+- pode ser cancelado;
+- não é excluído fisicamente;
+- não gera novos registros automáticos de acompanhamento.
+
+### DR-016 — Ativação
+
+Só pode ativar protocolo que:
+
+- esteja em `draft`;
+- tenha atleta e profissional válidos;
+- tenha vínculo `active`;
+- tenha pelo menos um item;
+- tenha data inicial válida;
+- não tenha data final anterior à inicial.
+
+### DR-017 — Protocolo ativo
+
+Protocolo `active`:
+
+- fica visível ao atleta;
+- não é editado diretamente sem versionamento;
+- mudanças materiais geram nova versão;
+- pode ser pausado ou encerrado.
+
+### DR-018 — Versionamento
+
+Toda mudança material em protocolo `active` ou `paused` cria nova versão sequencial.
+
+Mudanças materiais incluem:
+
+- inclusão ou remoção de item;
+- alteração de frequência;
+- alteração de período;
+- alteração de instruções operacionais relevantes;
+- alteração de campos que mudem o conteúdo efetivo do protocolo.
+
+A versão anterior permanece imutável.
+
+### DR-019 — Mudança somente de status
+
+Alteração apenas de status não cria nova versão de conteúdo.
+
+### DR-020 — Pausa
+
+`active -> paused` é permitido.
+
+Durante a pausa:
+
+- histórico anterior permanece;
+- o protocolo pode voltar a `active`;
+- a retomada não apaga o período de pausa.
+
+### DR-021 — Encerramento
+
+`active` ou `paused` pode virar `closed`.
+
+Após `closed`:
+
+- somente leitura;
+- não pode ser reaberto na V1;
+- não aceita novos registros vinculados ao protocolo;
+- histórico permanece disponível.
+
+### DR-022 — Cancelamento
+
+Somente `draft` pode virar `cancelled`.
+
+Protocolos ativados não são cancelados; são encerrados.
+
+### DR-023 — Datas
+
+- datas persistidas em UTC;
+- `endDate >= startDate`;
+- `continuous=true` permite `endDate=null`;
+- o sistema não calcula duração clínica.
+
+### DR-024 — Snapshot histórico
+
+Cada item da versão deve preservar snapshot mínimo da substância/item referenciado.
+
+Desativar item da biblioteca não altera versões históricas.
 
 ## 6. Registros de acompanhamento
 
@@ -180,31 +296,54 @@ Estados:
 - `missed`
 - `cancelled`
 
-### DR-017 — Origem
+Campo temporal padrão:
 
-Um registro pode ser:
+- `scheduledFor`
 
-- gerado a partir de protocolo ativo;
-- criado manualmente pelo profissional;
-- criado pelo atleta quando permitido.
+Filtros temporais padrão:
 
-### DR-018 — Conclusão
+- `dateFrom`
+- `dateTo`
 
-Atleta pode marcar registro próprio como `completed`, informando data e observação opcional.
+### DR-025 — Origem
 
-### DR-019 — Atraso
+Registro pode ser:
 
-Um registro vencido não vira automaticamente `completed`.
+- criado manualmente pelo profissional vinculado;
+- criado pelo atleta quando o tipo permitir;
+- associado opcionalmente a protocolo ativo.
 
-Pode ser classificado como `missed` por regra agendada ou ação autorizada.
+### DR-026 — Protocolo vinculado
 
-### DR-020 — Protocolo encerrado
+Não permitir criar novo tracking vinculado a protocolo `closed` ou `cancelled`.
 
-Não permitir criar novo registro vinculado a protocolo `closed`.
+Quando associado a protocolo, preservar referências necessárias para contexto histórico.
 
-### DR-021 — Histórico
+### DR-027 — Transições
 
-Registro `completed` não deve ser excluído permanentemente. Correções devem gerar auditoria.
+Permitido:
+
+```text
+scheduled -> completed
+scheduled -> missed
+scheduled -> cancelled
+```
+
+Estados finais não retornam a `scheduled` na V1.
+
+### DR-028 — Conclusão
+
+Ao concluir:
+
+- registrar `completedAt`;
+- registrar `completedBy`;
+- manter coerência entre status e campos de conclusão.
+
+### DR-029 — Histórico
+
+Registro concluído, perdido ou cancelado não é excluído fisicamente.
+
+Correções excepcionais devem ser auditadas.
 
 ## 7. Check-ins
 
@@ -214,183 +353,393 @@ Estados:
 - `submitted`
 - `reviewed`
 
-### DR-022 — Unicidade
+### DR-030 — Unicidade semanal
 
-Só pode existir um check-in do mesmo atleta para a mesma semana de referência.
+Só pode existir um check-in do mesmo atleta para a mesma `referenceWeek`.
 
-A semana começa na segunda-feira no timezone `America/Sao_Paulo`.
+A semana começa na segunda-feira, considerando `America/Sao_Paulo` para normalização funcional.
 
-### DR-023 — Envio
+### DR-031 — Protocolo opcional
 
-Atleta envia o check-in.
+Check-in pode referenciar `protocolId` opcional para manter contexto.
 
-Após `submitted`:
+### DR-032 — Rascunho
 
-- o atleta não edita o conteúdo no MVP;
-- correção exige reabertura pelo profissional ou administrador;
-- deve registrar `submittedAt`.
+Enquanto `pending`, o atleta pode editar respostas permitidas.
 
-### DR-024 — Revisão
+### DR-033 — Envio
 
-Somente profissional vinculado pode revisar.
+Somente o atleta dono envia.
 
-A revisão registra:
+`pending -> submitted`.
 
-- profissional;
-- comentário;
-- data;
-- status `reviewed`.
+Ao enviar:
 
-### DR-025 — Conteúdo
+- registrar `submittedAt`;
+- respostas ficam imutáveis para o atleta.
 
-O check-in pode registrar:
+### DR-034 — Revisão
 
-- peso;
-- medidas;
-- sono;
-- energia;
-- adesão;
-- efeitos relatados;
-- observações;
-- fotos, se upload for implementado depois.
+Somente profissional `approved` com vínculo `active` pode revisar.
 
-Nenhum campo gera diagnóstico automático.
-
-## 8. Exames
-
-### DR-026 — Propriedade
-
-Exame pertence a um atleta.
-
-### DR-027 — Cadastro
-
-Atleta ou profissional vinculado pode cadastrar conforme permissões.
-
-### DR-028 — Resultados
-
-Resultados são dados informados. O sistema não classifica automaticamente como seguro, perigoso, normal ou anormal.
-
-### DR-029 — Arquivo
-
-Upload de arquivo é opcional e pode ficar fora do MVP.
-
-### DR-030 — Exclusão
-
-Exame pode ser arquivado, não apagado definitivamente, quando já foi usado em acompanhamento.
-
-## 9. Evolução física
-
-### DR-031 — Registro temporal
-
-Cada evolução possui data de referência.
-
-### DR-032 — Valores
-
-Valores numéricos não podem ser negativos.
-
-### DR-033 — Comparação
-
-O sistema pode exibir diferença entre registros, sem atribuir causa ou recomendação.
-
-### DR-034 — Propriedade
-
-Atleta vê apenas sua evolução. Profissional vê apenas atletas vinculados.
-
-## 10. Estoque
-
-### DR-035 — Escopo administrativo
-
-O estoque serve para organização de itens cadastrados pelo usuário.
-
-### DR-036 — Quantidade
-
-Quantidade não pode ser negativa.
-
-### DR-037 — Unidade
-
-Unidades permitidas no MVP:
-
-- `unit`
-- `ml`
-- `mg`
-- `g`
-- `capsule`
-- `tablet`
-- `vial`
-- `box`
-
-### DR-038 — Validade
-
-Item vencido recebe alerta e não pode ser marcado como utilizado em registro futuro.
-
-### DR-039 — Baixa
-
-A baixa automática só ocorre quando houver regra determinística definida no item. Caso contrário, a baixa é manual.
-
-### DR-040 — Estoque insuficiente
-
-O sistema pode alertar insuficiência estimada, mas não recomendar compra, dose ou substituição.
-
-## 11. Notificações
-
-### DR-041 — Tipos
-
-- vínculo criado ou encerrado;
-- protocolo ativado, pausado ou encerrado;
-- check-in pendente;
-- check-in revisado;
-- registro agendado;
-- estoque baixo;
-- item vencido.
-
-### DR-042 — Leitura
-
-Usuário só marca suas próprias notificações como lidas.
-
-### DR-043 — Falha de entrega
-
-Notificação interna não pode bloquear operação principal.
-
-## 12. Dashboard
-
-### DR-044 — Dados por perfil
-
-Dashboard deve respeitar ownership e permissões.
-
-### DR-045 — Sem cálculo clínico
-
-Cards e gráficos mostram contagens, adesão informada e evolução histórica. Não produzem avaliação médica.
-
-## 13. Auditoria
-
-### DR-046 — Eventos auditáveis
+`submitted -> reviewed`.
 
 Registrar:
 
-- login relevante e bloqueios;
-- criação e alteração de vínculo;
-- ativação, pausa, versionamento e encerramento de protocolo;
-- alteração de registro concluído;
-- envio e revisão de check-in;
-- arquivamento de exame;
-- mudanças administrativas em usuário.
+- `reviewedAt`;
+- `reviewedBy`;
+- `reviewComment`.
 
-### DR-047 — Imutabilidade
+### DR-035 — Sem reabertura na V1
 
-Auditoria não pode ser alterada por usuários comuns.
+Check-in `submitted` ou `reviewed` não volta a `pending` na V1.
 
-### DR-048 — Conteúdo seguro
+Correções posteriores devem ocorrer por registro complementar ou procedimento administrativo auditado, sem sobrescrever o conteúdo original.
 
-Não gravar senha, token ou documento completo em auditoria.
+### DR-036 — Conteúdo
 
-## 14. Exclusão lógica
+Pode armazenar dados de acompanhamento definidos pelo produto, desde que:
 
-Preferir `archivedAt`, `deletedAt` ou `active: false` para:
+- não gerem diagnóstico automático;
+- não gerem prescrição;
+- não gerem recomendação automática.
 
-- usuários;
-- vínculos;
-- substâncias;
+## 8. Exames
+
+### DR-037 — Propriedade
+
+Exame pertence a um atleta.
+
+### DR-038 — Cadastro
+
+Atleta pode cadastrar exame próprio.
+
+Profissional `approved` com vínculo `active` pode cadastrar exame do atleta vinculado.
+
+### DR-039 — PDF
+
+A V1 suporta PDF de exame.
+
+O arquivo:
+
+- é validado por tipo e tamanho;
+- é armazenado via serviço de storage;
+- tem URL/metadados persistidos;
+- não é interpretado automaticamente.
+
+### DR-040 — Resultados estruturados
+
+Resultados estruturados são opcionais e informativos.
+
+O sistema não classifica como normal, anormal, seguro ou perigoso.
+
+### DR-041 — Arquivamento
+
+Exame não é excluído fisicamente.
+
+Pode ser arquivado quando necessário, preservando histórico e auditoria.
+
+## 9. Evolução física e timeline
+
+### DR-042 — Registro temporal
+
+Cada registro de evolução possui `referenceDate`.
+
+### DR-043 — Valores
+
+Valores numéricos, quando presentes, devem respeitar validações de domínio e não podem ser negativos.
+
+### DR-044 — Sem avaliação automática
+
+O sistema pode mostrar diferenças históricas, mas não atribui causa, julgamento ou recomendação.
+
+### DR-045 — Propriedade
+
+Atleta vê próprios registros.
+
+Profissional vê apenas atleta com vínculo `active`.
+
+### DR-046 — Timeline agregada
+
+A timeline histórica pode agregar eventos como:
+
+- criação e versões de protocolo;
+- mudanças de status relevantes;
+- check-ins enviados/revisados;
+- trackings;
 - exames;
-- registros históricos.
+- registros de evolução.
 
-Exclusão física é permitida apenas para rascunhos sem dependências e dados de teste.
+A timeline é uma visão derivada; não duplica nem altera os registros-fonte.
+
+## 10. Estoque simples
+
+O estoque existe para cumprir o escopo do TCC sem virar ERP.
+
+### DR-047 — Dono
+
+Estoque pertence ao atleta.
+
+Atleta gerencia o próprio estoque.
+
+Profissional `approved` com vínculo `active` possui leitura do estoque do atleta.
+
+### DR-048 — Quantidade
+
+Quantidade nunca pode ficar negativa.
+
+### DR-049 — Movimentações
+
+Quantidade muda por movimentação:
+
+- `in`
+- `out`
+- `adjustment`
+
+Movimentações são imutáveis.
+
+### DR-050 — Estoque insuficiente
+
+Saída maior que quantidade disponível é bloqueada.
+
+Erro de domínio: `INVENTORY_INSUFFICIENT`.
+
+### DR-051 — Validade
+
+Item vencido deve gerar estado/alerta e não pode ser usado em operação futura que o domínio marque como utilização.
+
+Erro de domínio quando aplicável: `INVENTORY_ITEM_EXPIRED`.
+
+### DR-052 — Estoque baixo
+
+Quando `quantity <= lowStockThreshold`, o item é considerado baixo para alertas e dashboard.
+
+O sistema não recomenda compra, dose ou substituição.
+
+### DR-053 — Escopo reduzido
+
+Fora da V1:
+
+- fornecedores;
+- compras;
+- custos;
+- pedidos;
+- múltiplos depósitos;
+- controle financeiro.
+
+### DR-054 — Arquivamento
+
+Item de estoque não é excluído fisicamente.
+
+Pode ser arquivado, mantendo movimentações históricas.
+
+## 11. Notificações
+
+### DR-055 — Apenas internas
+
+A V1 usa notificações internas.
+
+Não inclui push real, SMS, WhatsApp ou e-mail transacional obrigatório.
+
+### DR-056 — Eventos possíveis
+
+Exemplos:
+
+- vínculo solicitado;
+- vínculo aceito;
+- vínculo rejeitado;
+- vínculo encerrado;
+- profissional aprovado/rejeitado;
+- protocolo criado/atualizado/status alterado;
+- check-in disponível/enviado/revisado;
+- acompanhamento próximo;
+- exame adicionado;
+- estoque baixo;
+- item vencido.
+
+### DR-057 — Leitura
+
+Usuário só marca suas próprias notificações como lidas.
+
+### DR-058 — Não bloquear operação principal
+
+Falha ao criar notificação não deve invalidar a operação principal já concluída, salvo se explicitamente tratado como transação futura.
+
+## 12. Dashboard
+
+### DR-059 — Endpoint único
+
+A API expõe:
+
+```text
+GET /api/v1/dashboard
+```
+
+A resposta varia conforme `req.user.role`.
+
+### DR-060 — Escopo por perfil
+
+Dashboard respeita ownership, vínculo e aprovação profissional.
+
+### DR-061 — Sem cálculo clínico
+
+Cards e listas mostram dados operacionais e históricos; não produzem avaliação médica.
+
+### DR-062 — Atleta
+
+Pode incluir:
+
+- protocolo ativo;
+- próximo acompanhamento;
+- check-in atual;
+- atividade recente;
+- notificações não lidas;
+- alertas simples de estoque.
+
+### DR-063 — Profissional
+
+Pode incluir:
+
+- atletas vinculados ativos;
+- protocolos ativos;
+- check-ins aguardando revisão;
+- próximos acompanhamentos;
+- atividade recente.
+
+### DR-064 — Admin
+
+Pode incluir:
+
+- usuários por perfil;
+- profissionais pendentes;
+- contas bloqueadas/ativas;
+- vínculos ativos;
+- logs recentes ou contagens administrativas.
+
+## 13. Auditoria
+
+### DR-065 — Eventos auditáveis
+
+Registrar ações relevantes, incluindo:
+
+- bloqueio/desbloqueio de usuário;
+- cadastro/aprovação/rejeição profissional;
+- solicitação/aceite/rejeição/encerramento de vínculo;
+- criação e versionamento de protocolo;
+- mudanças de status de protocolo;
+- mudanças relevantes de tracking;
+- envio e revisão de check-in;
+- cadastro/arquivamento de exame;
+- alterações de estoque relevantes;
+- ações administrativas críticas.
+
+### DR-066 — Imutabilidade
+
+AuditLog é imutável para usuários.
+
+Somente a aplicação escreve.
+
+### DR-067 — Conteúdo seguro
+
+Não gravar:
+
+- senha;
+- token;
+- PDF completo;
+- conteúdo integral de exame;
+- documento profissional completo;
+- segredos de ambiente.
+
+Metadata deve ser mínima e segura.
+
+## 14. Exclusão e preservação histórica
+
+### DR-068 — Sem DELETE físico na V1
+
+Dados de negócio não são excluídos fisicamente.
+
+Preferir:
+
+- `active=false`;
+- `archivedAt`;
+- mudança de status;
+- encerramento/cancelamento.
+
+### DR-069 — Usuários
+
+Usuário é bloqueado/desativado, não apagado.
+
+Histórico permanece.
+
+### DR-070 — Protocolos
+
+Rascunho pode ser `cancelled`, não deletado.
+
+Protocolos publicados permanecem para sempre no histórico.
+
+### DR-071 — Check-ins, tracking, exames e evolução
+
+Preservar registros e arquivar quando necessário.
+
+### DR-072 — Estoque
+
+Arquivar item sem apagar movimentações.
+
+### DR-073 — Notificações
+
+Pode haver ocultação/arquivamento visual, sem remover auditoria relacionada.
+
+## 15. Upload e storage
+
+### DR-074 — Abstração de storage
+
+Upload deve passar por serviço próprio, sem acoplar controllers ao provedor.
+
+### DR-075 — Tipos suportados na V1
+
+- comprovação profissional: PDF obrigatório;
+- exame: PDF suportado.
+
+### DR-076 — Validação
+
+Validar no mínimo:
+
+- MIME esperado;
+- extensão compatível;
+- tamanho máximo configurado;
+- nome seguro;
+- autorização de quem envia.
+
+## 16. Seed e demonstração
+
+### DR-077 — Seed mínimo
+
+Seed deve criar apenas o necessário para segurança da apresentação:
+
+- 1 admin;
+- 1 profissional aprovado;
+- 1 atleta;
+- 1 usuário extra opcional para testar acesso negado;
+- poucas substâncias fictícias;
+- 1 vínculo ativo;
+- poucos registros de backup.
+
+### DR-078 — Fluxo principal da banca
+
+Priorizar criação ao vivo do fluxo:
+
+```text
+cadastro profissional
+-> aprovação admin
+-> solicitação de vínculo
+-> aceite atleta
+-> criação/ativação/versionamento de protocolo
+-> check-in
+-> revisão
+-> tracking/exame/evolução
+-> timeline
+-> estoque
+-> auditoria
+```
+
+Seed serve como contingência.
