@@ -20,6 +20,9 @@ Copie `.env.example` para `.env` e ajuste os valores:
 NODE_ENV=development
 PORT=3000
 MONGODB_URI=mongodb://127.0.0.1:27017/atlas_protocol
+JWT_SECRET=substitua-por-uma-chave-segura-com-32-caracteres
+JWT_EXPIRES_IN=1h
+BCRYPT_SALT_ROUNDS=12
 ```
 
 ## Execução

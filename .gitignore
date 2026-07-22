@@ -5,3 +5,7 @@ node_modules/
 coverage/
 npm-debug.log*
 .DS_Store
+AGENTS.md
+.agents
+.gitignore
+docs/
