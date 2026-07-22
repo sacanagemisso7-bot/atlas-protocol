@@ -4,6 +4,9 @@ const { MongoMemoryServer } = require('mongodb-memory-server');
 const request = require('supertest');
 
 const app = require('../../src/app');
+const AUDIT_ACTIONS = require('../../src/constants/audit-actions');
+const AUDIT_ENTITY_TYPES = require('../../src/constants/audit-entity-types');
+const AuditLog = require('../../src/models/audit-log');
 const User = require('../../src/models/user');
 const { generateToken } = require('../../src/utils/jwt');
 
@@ -30,7 +33,7 @@ describe('gestão de usuários', () => {
   }, 120000);
 
   afterEach(async () => {
-    await User.deleteMany({});
+    await Promise.all([AuditLog.deleteMany({}), User.deleteMany({})]);
   });
 
   afterAll(async () => {
@@ -306,6 +309,32 @@ describe('gestão de usuários', () => {
         .get(`/api/v1/users/${athlete.id}`)
         .set('Authorization', authorization(athlete));
       expect(allowed.status).toBe(200);
+
+      const auditLogs = await AuditLog.find({ entityId: athlete.id }).sort({
+        createdAt: 1,
+        _id: 1,
+      });
+      expect(auditLogs).toHaveLength(2);
+      expect(auditLogs.map((auditLog) => auditLog.action)).toEqual([
+        AUDIT_ACTIONS.USER_BLOCKED,
+        AUDIT_ACTIONS.USER_UNBLOCKED,
+      ]);
+      expect(auditLogs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            actorId: admin._id,
+            entityType: AUDIT_ENTITY_TYPES.USER,
+            entityId: athlete._id,
+            metadata: { from: false, to: true },
+          }),
+          expect.objectContaining({
+            actorId: admin._id,
+            entityType: AUDIT_ENTITY_TYPES.USER,
+            entityId: athlete._id,
+            metadata: { from: true, to: false },
+          }),
+        ]),
+      );
     });
 
     it('impede que admin bloqueie a própria conta', async () => {

@@ -4,6 +4,9 @@ const { MongoMemoryServer } = require('mongodb-memory-server');
 const request = require('supertest');
 
 const app = require('../../src/app');
+const AUDIT_ACTIONS = require('../../src/constants/audit-actions');
+const AUDIT_ENTITY_TYPES = require('../../src/constants/audit-entity-types');
+const AuditLog = require('../../src/models/audit-log');
 const ProfessionalProfile = require('../../src/models/professional-profile');
 const User = require('../../src/models/user');
 const { generateToken } = require('../../src/utils/jwt');
@@ -65,6 +68,7 @@ describe('verificacao profissional', () => {
 
   afterEach(async () => {
     await Promise.all([
+      AuditLog.deleteMany({}),
       ProfessionalProfile.deleteMany({}),
       User.deleteMany({}),
     ]);
@@ -330,6 +334,17 @@ describe('verificacao profissional', () => {
       expect(stored.reviewedAt).toBeInstanceOf(Date);
       expect(stored.rejectionReason).toBeNull();
 
+      const auditLogs = await AuditLog.find({
+        action: AUDIT_ACTIONS.PROFESSIONAL_APPROVED,
+      });
+      expect(auditLogs).toHaveLength(1);
+      expect(auditLogs[0]).toMatchObject({
+        actorId: admin._id,
+        entityType: AUDIT_ENTITY_TYPES.PROFESSIONAL_PROFILE,
+        entityId: profile._id,
+        metadata: { from: 'pending', to: 'approved' },
+      });
+
       const approvedAccess = await request(app)
         .get('/api/v1/links')
         .set('Authorization', authorization(professional));
@@ -385,6 +400,19 @@ describe('verificacao profissional', () => {
       const stored = await ProfessionalProfile.findById(profile.id);
       expect(stored.verificationStatus).toBe('rejected');
       expect(stored.rejectionReason).toBe(
+        'Documento invalido ou insuficiente.',
+      );
+
+      const auditLog = await AuditLog.findOne({
+        action: AUDIT_ACTIONS.PROFESSIONAL_REJECTED,
+      });
+      expect(auditLog).toMatchObject({
+        actorId: admin._id,
+        entityType: AUDIT_ENTITY_TYPES.PROFESSIONAL_PROFILE,
+        entityId: profile._id,
+        metadata: { from: 'pending', to: 'rejected' },
+      });
+      expect(JSON.stringify(auditLog.metadata)).not.toContain(
         'Documento invalido ou insuficiente.',
       );
 

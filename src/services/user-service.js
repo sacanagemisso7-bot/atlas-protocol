@@ -1,8 +1,11 @@
+const AUDIT_ACTIONS = require('../constants/audit-actions');
+const AUDIT_ENTITY_TYPES = require('../constants/audit-entity-types');
 const ERROR_CODES = require('../constants/error-codes');
 const USER_ROLES = require('../constants/user-roles');
 const User = require('../models/user');
 const AppError = require('../utils/app-error');
 const toSafeUser = require('../utils/user-response');
+const auditService = require('./audit-service');
 
 function resourceNotFoundError() {
   return new AppError(
@@ -139,7 +142,7 @@ async function updateUser(requester, userId, updates) {
 }
 
 async function setUserBlocked(requester, userId, blocked) {
-  if (requester.id === userId && blocked) {
+  if (requester._id.equals(userId) && blocked) {
     throw new AppError(
       422,
       ERROR_CODES.INVALID_STATE_TRANSITION,
@@ -154,8 +157,21 @@ async function setUserBlocked(requester, userId, blocked) {
     throw invalidAdminTransitionError();
   }
 
+  const wasBlocked = Boolean(user.blockedAt);
   user.blockedAt = blocked ? new Date() : null;
   await user.save();
+
+  if (wasBlocked !== blocked) {
+    await auditService.record({
+      actorId: requester.id,
+      action: blocked
+        ? AUDIT_ACTIONS.USER_BLOCKED
+        : AUDIT_ACTIONS.USER_UNBLOCKED,
+      entityType: AUDIT_ENTITY_TYPES.USER,
+      entityId: user.id,
+      metadata: { from: wasBlocked, to: blocked },
+    });
+  }
 
   return toSafeUser(user);
 }

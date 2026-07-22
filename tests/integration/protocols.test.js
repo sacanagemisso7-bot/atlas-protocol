@@ -4,6 +4,9 @@ const { MongoMemoryServer } = require('mongodb-memory-server');
 const request = require('supertest');
 
 const app = require('../../src/app');
+const AUDIT_ACTIONS = require('../../src/constants/audit-actions');
+const AUDIT_ENTITY_TYPES = require('../../src/constants/audit-entity-types');
+const AuditLog = require('../../src/models/audit-log');
 const ProfessionalAthleteLink = require('../../src/models/professional-athlete-link');
 const ProfessionalProfile = require('../../src/models/professional-profile');
 const Protocol = require('../../src/models/protocol');
@@ -108,6 +111,7 @@ describe('protocolos e versionamento', () => {
 
   afterEach(async () => {
     await Promise.all([
+      AuditLog.deleteMany({}),
       ProtocolVersion.deleteMany({}),
       Protocol.deleteMany({}),
       ProfessionalAthleteLink.deleteMany({}),
@@ -154,6 +158,20 @@ describe('protocolos e versionamento', () => {
       });
       expect(await Protocol.countDocuments()).toBe(1);
       expect(await ProtocolVersion.countDocuments()).toBe(1);
+
+      const protocol = await Protocol.findOne({});
+      const auditLog = await AuditLog.findOne({
+        action: AUDIT_ACTIONS.PROTOCOL_CREATED,
+      });
+      expect(auditLog).toMatchObject({
+        actorId: professional._id,
+        entityType: AUDIT_ENTITY_TYPES.PROTOCOL,
+        entityId: protocol._id,
+        metadata: { status: 'draft', version: 1 },
+      });
+      expect(JSON.stringify(auditLog.metadata)).not.toMatch(
+        /items|instructions|dosage|notes/i,
+      );
     });
 
     it('impede criação sem vínculo ativo', async () => {
@@ -447,6 +465,18 @@ describe('protocolos e versionamento', () => {
       expect(versions[0].items[0].substanceSnapshot.name).toBe('Creatina');
       expect(versions[1].title).toBe('Versão ativa');
       expect(versions[2].objective).toBe('Objetivo revisado');
+
+      const versionAuditLogs = await AuditLog.find({
+        action: AUDIT_ACTIONS.PROTOCOL_VERSION_CREATED,
+      }).sort({ createdAt: 1, _id: 1 });
+      expect(versionAuditLogs).toHaveLength(2);
+      expect(versionAuditLogs.map((auditLog) => auditLog.metadata)).toEqual([
+        { previousVersion: 1, newVersion: 2 },
+        { previousVersion: 2, newVersion: 3 },
+      ]);
+      expect(JSON.stringify(versionAuditLogs)).not.toMatch(
+        /items|instructions|dosage|notes/i,
+      );
     });
 
     it('impede alteração por atleta, admin, terceiro e após encerramento', async () => {
@@ -547,6 +577,16 @@ describe('protocolos e versionamento', () => {
       expect(resumed.body.data.protocol.status).toBe('active');
       expect(closed.body.data.protocol.status).toBe('closed');
       expect(await ProtocolVersion.countDocuments({ protocolId })).toBe(1);
+
+      const statusAuditLogs = await AuditLog.find({
+        action: AUDIT_ACTIONS.PROTOCOL_STATUS_CHANGED,
+      }).sort({ createdAt: 1, _id: 1 });
+      expect(statusAuditLogs.map((auditLog) => auditLog.metadata)).toEqual([
+        { from: 'draft', to: 'active' },
+        { from: 'active', to: 'paused' },
+        { from: 'paused', to: 'active' },
+        { from: 'active', to: 'closed' },
+      ]);
     });
 
     it('cancela somente draft e rejeita transições inválidas', async () => {

@@ -1,6 +1,8 @@
 const bcrypt = require('bcrypt');
 
 const env = require('../config/env');
+const AUDIT_ACTIONS = require('../constants/audit-actions');
+const AUDIT_ENTITY_TYPES = require('../constants/audit-entity-types');
 const ERROR_CODES = require('../constants/error-codes');
 const PROFESSIONAL_VERIFICATION_STATUSES = require(
   '../constants/professional-verification-statuses'
@@ -8,6 +10,7 @@ const PROFESSIONAL_VERIFICATION_STATUSES = require(
 const USER_ROLES = require('../constants/user-roles');
 const ProfessionalProfile = require('../models/professional-profile');
 const User = require('../models/user');
+const auditService = require('./audit-service');
 const storage = require('../storage');
 const AppError = require('../utils/app-error');
 const { generateToken } = require('../utils/jwt');
@@ -143,6 +146,15 @@ async function registerProfessional({ name, email, password }, document) {
         originalName: sanitizeOriginalName(document.originalname),
         mimeType: document.mimetype,
         sizeBytes: document.size,
+      },
+    });
+    await auditService.record({
+      actorId: user.id,
+      action: AUDIT_ACTIONS.PROFESSIONAL_REGISTERED,
+      entityType: AUDIT_ENTITY_TYPES.PROFESSIONAL_PROFILE,
+      entityId: profile.id,
+      metadata: {
+        verificationStatus: PROFESSIONAL_VERIFICATION_STATUSES.PENDING,
       },
     });
   } catch (error) {

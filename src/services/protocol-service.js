@@ -1,3 +1,5 @@
+const AUDIT_ACTIONS = require('../constants/audit-actions');
+const AUDIT_ENTITY_TYPES = require('../constants/audit-entity-types');
 const ERROR_CODES = require('../constants/error-codes');
 const LINK_STATUSES = require('../constants/link-statuses');
 const PROTOCOL_STATUSES = require('../constants/protocol-statuses');
@@ -12,6 +14,7 @@ const {
   toProtocolResponse,
   toVersionResponse,
 } = require('../utils/protocol-response');
+const auditService = require('./audit-service');
 
 function notFoundError(resource = 'Protocolo') {
   return new AppError(
@@ -183,8 +186,22 @@ async function createProtocol(requester, input) {
       continuous: protocol.continuous,
       items,
     });
+    await auditService.record({
+      actorId: requester.id,
+      action: AUDIT_ACTIONS.PROTOCOL_CREATED,
+      entityType: AUDIT_ENTITY_TYPES.PROTOCOL,
+      entityId: protocol.id,
+      metadata: {
+        status: protocol.status,
+        version: protocol.currentVersion,
+      },
+    });
   } catch (error) {
-    await Protocol.deleteOne({ _id: protocol.id });
+    const cleanupOperations = [Protocol.deleteOne({ _id: protocol.id })];
+    if (version) {
+      cleanupOperations.push(ProtocolVersion.deleteOne({ _id: version.id }));
+    }
+    await Promise.allSettled(cleanupOperations);
     throw error;
   }
 
@@ -335,6 +352,17 @@ async function updateProtocol(requester, protocolId, input) {
     throw error;
   }
 
+  await auditService.record({
+    actorId: requester.id,
+    action: AUDIT_ACTIONS.PROTOCOL_VERSION_CREATED,
+    entityType: AUDIT_ENTITY_TYPES.PROTOCOL,
+    entityId: protocol.id,
+    metadata: {
+      previousVersion: nextVersionNumber - 1,
+      newVersion: nextVersionNumber,
+    },
+  });
+
   return {
     protocol: toProtocolResponse(protocol),
     currentVersion: toVersionResponse(nextVersion),
@@ -344,6 +372,7 @@ async function updateProtocol(requester, protocolId, input) {
 async function transitionProtocol(requester, protocolId, action) {
   const protocol = await getOwnedProtocol(requester, protocolId);
   const now = new Date();
+  const previousStatus = protocol.status;
 
   if (action === 'activate') {
     if (
@@ -396,6 +425,13 @@ async function transitionProtocol(requester, protocolId, action) {
   }
 
   await protocol.save();
+  await auditService.record({
+    actorId: requester.id,
+    action: AUDIT_ACTIONS.PROTOCOL_STATUS_CHANGED,
+    entityType: AUDIT_ENTITY_TYPES.PROTOCOL,
+    entityId: protocol.id,
+    metadata: { from: previousStatus, to: protocol.status },
+  });
   return toProtocolResponse(protocol);
 }
 

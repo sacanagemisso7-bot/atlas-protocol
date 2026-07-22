@@ -6,8 +6,12 @@ const { MongoMemoryServer } = require('mongodb-memory-server');
 const request = require('supertest');
 
 const app = require('../../src/app');
+const AUDIT_ACTIONS = require('../../src/constants/audit-actions');
+const AUDIT_ENTITY_TYPES = require('../../src/constants/audit-entity-types');
+const AuditLog = require('../../src/models/audit-log');
 const ProfessionalProfile = require('../../src/models/professional-profile');
 const User = require('../../src/models/user');
+const auditService = require('../../src/services/audit-service');
 const storage = require('../../src/storage');
 const { verifyToken } = require('../../src/utils/jwt');
 
@@ -78,6 +82,7 @@ describe('cadastro e sessão de profissional', () => {
         .filter(Boolean)
         .map((storageKey) => storage.remove(storageKey)),
     );
+    await AuditLog.deleteMany({});
     await ProfessionalProfile.deleteMany({});
     await User.deleteMany({});
   });
@@ -142,6 +147,20 @@ describe('cadastro e sessão de profissional', () => {
       });
       expect(profile.verificationDocument.storageKey).not.toBe(
         'comprovante.pdf',
+      );
+
+      const auditLog = await AuditLog.findOne({
+        action: AUDIT_ACTIONS.PROFESSIONAL_REGISTERED,
+      });
+      expect(auditLog).toMatchObject({
+        actorId: user._id,
+        action: AUDIT_ACTIONS.PROFESSIONAL_REGISTERED,
+        entityType: AUDIT_ENTITY_TYPES.PROFESSIONAL_PROFILE,
+        entityId: profile._id,
+        metadata: { verificationStatus: 'pending' },
+      });
+      expect(JSON.stringify(auditLog)).not.toMatch(
+        /password|token|jwt|buffer|storageKey|verificationDocument/i,
       );
 
       const tokenPayload = verifyToken(response.body.data.token);
@@ -259,6 +278,37 @@ describe('cadastro e sessão de profissional', () => {
         expect(storageRemove).toHaveBeenCalledWith(expect.stringMatching(/\.pdf$/));
       } finally {
         profileCreate.mockRestore();
+        storageRemove.mockRestore();
+        consoleError.mockRestore();
+      }
+    });
+
+    it('compensa cadastro e arquivo quando a auditoria falha', async () => {
+      const auditRecord = jest
+        .spyOn(auditService, 'record')
+        .mockRejectedValueOnce(new Error('Falha simulada na auditoria.'));
+      const storageRemove = jest.spyOn(storage, 'remove');
+      const consoleError = jest
+        .spyOn(console, 'error')
+        .mockImplementation(() => {});
+
+      try {
+        const response = await professionalRegistrationRequest().attach(
+          'document',
+          validPdf,
+          { filename: 'comprovante.pdf', contentType: 'application/pdf' },
+        );
+
+        expect(response.status).toBe(500);
+        expect(response.body.error.code).toBe('INTERNAL_ERROR');
+        expect(await User.countDocuments()).toBe(0);
+        expect(await ProfessionalProfile.countDocuments()).toBe(0);
+        expect(await AuditLog.countDocuments()).toBe(0);
+        expect(storageRemove).toHaveBeenCalledWith(
+          expect.stringMatching(/\.pdf$/),
+        );
+      } finally {
+        auditRecord.mockRestore();
         storageRemove.mockRestore();
         consoleError.mockRestore();
       }

@@ -1,3 +1,5 @@
+const AUDIT_ACTIONS = require('../constants/audit-actions');
+const AUDIT_ENTITY_TYPES = require('../constants/audit-entity-types');
 const ERROR_CODES = require('../constants/error-codes');
 const PROFESSIONAL_VERIFICATION_STATUSES = require(
   '../constants/professional-verification-statuses',
@@ -7,6 +9,7 @@ const ProfessionalProfile = require('../models/professional-profile');
 const User = require('../models/user');
 const AppError = require('../utils/app-error');
 const toProfessionalVerificationResponse = require('../utils/professional-verification-response');
+const auditService = require('./audit-service');
 
 const SAFE_USER_FIELDS = 'name email role active';
 
@@ -102,7 +105,12 @@ async function getProfessionalVerificationById(profileId) {
   });
 }
 
-async function transitionPendingVerification(profileId, reviewerId, update) {
+async function transitionPendingVerification(
+  profileId,
+  reviewerId,
+  update,
+  auditAction,
+) {
   const profile = await ProfessionalProfile.findOneAndUpdate(
     {
       _id: profileId,
@@ -124,6 +132,17 @@ async function transitionPendingVerification(profileId, reviewerId, update) {
     throw alreadyReviewedError();
   }
 
+  await auditService.record({
+    actorId: reviewerId,
+    action: auditAction,
+    entityType: AUDIT_ENTITY_TYPES.PROFESSIONAL_PROFILE,
+    entityId: profile.id,
+    metadata: {
+      from: PROFESSIONAL_VERIFICATION_STATUSES.PENDING,
+      to: profile.verificationStatus,
+    },
+  });
+
   await profile.populate({ path: 'userId', select: SAFE_USER_FIELDS });
   return toProfessionalVerificationResponse(profile, {
     includeDocument: true,
@@ -134,14 +153,14 @@ function approveProfessionalVerification(profileId, reviewerId) {
   return transitionPendingVerification(profileId, reviewerId, {
     verificationStatus: PROFESSIONAL_VERIFICATION_STATUSES.APPROVED,
     rejectionReason: null,
-  });
+  }, AUDIT_ACTIONS.PROFESSIONAL_APPROVED);
 }
 
 function rejectProfessionalVerification(profileId, reviewerId, reason) {
   return transitionPendingVerification(profileId, reviewerId, {
     verificationStatus: PROFESSIONAL_VERIFICATION_STATUSES.REJECTED,
     rejectionReason: reason,
-  });
+  }, AUDIT_ACTIONS.PROFESSIONAL_REJECTED);
 }
 
 module.exports = {
