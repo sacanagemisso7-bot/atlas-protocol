@@ -1,0 +1,18 @@
+const PROTOCOL_STATUSES = require('./protocol-statuses');
+
+module.exports = Object.freeze({
+  [PROTOCOL_STATUSES.ACTIVE]: Object.freeze([
+    PROTOCOL_STATUSES.PAUSED,
+    PROTOCOL_STATUSES.CLOSED,
+  ]),
+  [PROTOCOL_STATUSES.CANCELLED]: Object.freeze([]),
+  [PROTOCOL_STATUSES.CLOSED]: Object.freeze([]),
+  [PROTOCOL_STATUSES.DRAFT]: Object.freeze([
+    PROTOCOL_STATUSES.ACTIVE,
+    PROTOCOL_STATUSES.CANCELLED,
+  ]),
+  [PROTOCOL_STATUSES.PAUSED]: Object.freeze([
+    PROTOCOL_STATUSES.ACTIVE,
+    PROTOCOL_STATUSES.CLOSED,
+  ]),
+});

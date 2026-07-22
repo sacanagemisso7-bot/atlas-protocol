@@ -8,12 +8,12 @@ const allowRoles = require('../middlewares/role-middleware');
 const validate = require('../middlewares/validation-middleware');
 const asyncHandler = require('../utils/async-handler');
 const {
+  createProtocolVersionSchema,
   createProtocolSchema,
-  emptyBodySchema,
   protocolIdParamsSchema,
   protocolListQuerySchema,
+  protocolStatusSchema,
   protocolVersionParamsSchema,
-  reasonSchema,
   updateProtocolSchema,
 } = require('../validators/protocol-validators');
 
@@ -37,7 +37,7 @@ router.get(
   asyncHandler(protocolController.listProtocols),
 );
 router.get(
-  '/:id/versions/:versionNumber',
+  '/:id/versions/:version',
   allowRoles(...allRoles),
   professionalApprovalMiddleware,
   validate(protocolVersionParamsSchema, 'params'),
@@ -50,37 +50,21 @@ router.get(
   validate(protocolIdParamsSchema, 'params'),
   asyncHandler(protocolController.listVersions),
 );
-router.patch(
-  '/:id/activate',
+router.post(
+  '/:id/versions',
   allowRoles(USER_ROLES.PROFESSIONAL),
   professionalApprovalMiddleware,
   validate(protocolIdParamsSchema, 'params'),
-  validate(emptyBodySchema),
-  asyncHandler(protocolController.activateProtocol),
+  validate(createProtocolVersionSchema),
+  asyncHandler(protocolController.createProtocolVersion),
 );
 router.patch(
-  '/:id/pause',
+  '/:id/status',
   allowRoles(USER_ROLES.PROFESSIONAL),
   professionalApprovalMiddleware,
   validate(protocolIdParamsSchema, 'params'),
-  validate(reasonSchema),
-  asyncHandler(protocolController.pauseProtocol),
-);
-router.patch(
-  '/:id/close',
-  allowRoles(USER_ROLES.PROFESSIONAL),
-  professionalApprovalMiddleware,
-  validate(protocolIdParamsSchema, 'params'),
-  validate(reasonSchema),
-  asyncHandler(protocolController.closeProtocol),
-);
-router.patch(
-  '/:id/cancel',
-  allowRoles(USER_ROLES.PROFESSIONAL),
-  professionalApprovalMiddleware,
-  validate(protocolIdParamsSchema, 'params'),
-  validate(emptyBodySchema),
-  asyncHandler(protocolController.cancelProtocol),
+  validate(protocolStatusSchema),
+  asyncHandler(protocolController.updateProtocolStatus),
 );
 router.patch(
   '/:id',

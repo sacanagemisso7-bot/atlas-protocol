@@ -42,19 +42,30 @@ async function updateProtocol(request, response) {
   });
 }
 
-function transition(action, message) {
-  return async (request, response) => {
-    const protocol = await protocolService.transitionProtocol(
-      request.user,
-      request.params.id,
-      action,
-    );
-    return response.status(200).json({
-      success: true,
-      data: { protocol },
-      message,
-    });
-  };
+async function createProtocolVersion(request, response) {
+  const result = await protocolService.createProtocolVersion(
+    request.user,
+    request.params.id,
+    request.body,
+  );
+  return response.status(201).json({
+    success: true,
+    data: result,
+    message: 'Nova versão do protocolo criada com sucesso.',
+  });
+}
+
+async function updateProtocolStatus(request, response) {
+  const protocol = await protocolService.updateProtocolStatus(
+    request.user,
+    request.params.id,
+    request.body,
+  );
+  return response.status(200).json({
+    success: true,
+    data: { protocol },
+    message: 'Status do protocolo atualizado com sucesso.',
+  });
 }
 
 async function listVersions(request, response) {
@@ -72,7 +83,7 @@ async function getVersion(request, response) {
   const version = await protocolService.getVersion(
     request.user,
     request.params.id,
-    request.params.versionNumber,
+    request.params.version,
   );
   return response.status(200).json({
     success: true,
@@ -82,14 +93,12 @@ async function getVersion(request, response) {
 }
 
 module.exports = {
-  activateProtocol: transition('activate', 'Protocolo ativado com sucesso.'),
-  cancelProtocol: transition('cancel', 'Protocolo cancelado com sucesso.'),
-  closeProtocol: transition('close', 'Protocolo encerrado com sucesso.'),
   createProtocol,
+  createProtocolVersion,
   getProtocol,
   getVersion,
   listProtocols,
   listVersions,
-  pauseProtocol: transition('pause', 'Protocolo pausado com sucesso.'),
   updateProtocol,
+  updateProtocolStatus,
 };

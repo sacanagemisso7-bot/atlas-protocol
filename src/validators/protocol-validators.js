@@ -27,11 +27,6 @@ const protocolItemSchema = Joi.object({
   startDate: nullableDate,
   endDate: nullableDate,
   active: Joi.boolean().default(true),
-  dosage: Joi.string().trim().max(120).allow(null, ''),
-  unit: Joi.string().trim().max(40).allow(null, ''),
-  frequency: Joi.string().trim().max(120).allow(null, ''),
-  schedule: Joi.string().trim().max(200).allow(null, ''),
-  notes: Joi.string().trim().max(1000).allow(null, ''),
 })
   .custom((value, helpers) => {
     if (
@@ -63,13 +58,17 @@ function validateProtocolDates(value, helpers) {
   return value;
 }
 
-const protocolFields = {
-  title: Joi.string().trim().min(3).max(160),
-  objective: Joi.string().trim().max(1000).allow(null, ''),
+const versionFields = {
   startDate: Joi.date().iso(),
   endDate: nullableDate,
   continuous: Joi.boolean(),
   items: Joi.array().items(protocolItemSchema).max(100),
+};
+
+const protocolFields = {
+  title: Joi.string().trim().min(3).max(160),
+  objective: Joi.string().trim().max(1000).allow(null, ''),
+  ...versionFields,
 };
 
 const protocolDateMessages = {
@@ -96,7 +95,6 @@ const createProtocolSchema = Joi.object({
 
 const updateProtocolSchema = Joi.object({
   ...protocolFields,
-  changeReason: Joi.string().trim().min(3).max(500).allow(null),
 })
   .min(1)
   .custom(validateProtocolDates)
@@ -106,13 +104,33 @@ const updateProtocolSchema = Joi.object({
   })
   .unknown(false);
 
+const createProtocolVersionSchema = Joi.object({
+  ...versionFields,
+  changeReason: Joi.string().trim().max(500).allow(null),
+})
+  .or('startDate', 'endDate', 'continuous', 'items')
+  .custom(validateProtocolDates)
+  .messages({
+    ...protocolDateMessages,
+    'object.missing': 'Informe ao menos uma alteração material.',
+  })
+  .unknown(false);
+
+const protocolStatusSchema = Joi.object({
+  status: Joi.string()
+    .valid(...Object.values(PROTOCOL_STATUSES))
+    .required()
+    .messages({ 'any.required': 'Informe o novo status.' }),
+  reason: Joi.string().trim().max(500).allow(null),
+}).unknown(false);
+
 const protocolIdParamsSchema = Joi.object({
   id: objectId.required().messages({ 'any.required': 'Informe o protocolo.' }),
 }).unknown(false);
 
 const protocolVersionParamsSchema = Joi.object({
   id: objectId.required().messages({ 'any.required': 'Informe o protocolo.' }),
-  versionNumber: Joi.number().integer().min(1).required().messages({
+  version: Joi.number().integer().min(1).required().messages({
     'any.required': 'Informe o número da versão.',
     'number.base': 'Informe um número de versão válido.',
   }),
@@ -122,7 +140,6 @@ const protocolListQuerySchema = Joi.object({
   status: Joi.string().valid(...Object.values(PROTOCOL_STATUSES)),
   athleteId: objectId,
   professionalId: objectId,
-  substanceId: objectId,
   dateFrom: Joi.date().iso(),
   dateTo: Joi.date().iso(),
   page: Joi.number().integer().min(1).default(1),
@@ -147,18 +164,12 @@ const protocolListQuerySchema = Joi.object({
   })
   .unknown(false);
 
-const reasonSchema = Joi.object({
-  reason: Joi.string().trim().min(3).max(500).required(),
-}).unknown(false);
-
-const emptyBodySchema = Joi.object({}).unknown(false);
-
 module.exports = {
+  createProtocolVersionSchema,
   createProtocolSchema,
-  emptyBodySchema,
   protocolIdParamsSchema,
   protocolListQuerySchema,
+  protocolStatusSchema,
   protocolVersionParamsSchema,
-  reasonSchema,
   updateProtocolSchema,
 };

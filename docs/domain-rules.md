@@ -199,6 +199,20 @@ Somente profissional `approved` com vínculo `active` pode criar protocolo para 
 
 Protocolo nasce em `draft` e cria versão inicial 1.
 
+Na criação, o protocolo também recebe a entrada inicial de histórico:
+
+```text
+from = null
+to = draft
+reason = null
+changedAt = data de criação
+changedBy = profissional responsável
+```
+
+Essa criação gera `PROTOCOL_CREATED` no AuditLog. Não deve gerar
+`PROTOCOL_STATUS_CHANGED` adicional apenas pela entrada inicial, para evitar
+auditoria duplicada do mesmo evento.
+
 ### DR-015 — Rascunho
 
 Protocolo `draft`:
@@ -219,6 +233,10 @@ Só pode ativar protocolo que:
 - tenha pelo menos um item;
 - tenha data inicial válida;
 - não tenha data final anterior à inicial.
+
+`activatedAt` representa a primeira transição `draft -> active`: é preenchido
+nessa ativação, nunca é apagado e não é sobrescrito em uma retomada
+`paused -> active`.
 
 ### DR-017 — Protocolo ativo
 
@@ -243,9 +261,33 @@ Mudanças materiais incluem:
 
 A versão anterior permanece imutável.
 
+Cada versão posterior à versão inicial gera exatamente um
+`PROTOCOL_VERSION_CREATED` no AuditLog. A versão 1 faz parte da criação do
+protocolo e é coberta por `PROTOCOL_CREATED`, sem log adicional de versão.
+
 ### DR-019 — Mudança somente de status
 
 Alteração apenas de status não cria nova versão de conteúdo.
+
+Toda transição realizada por `PATCH /api/v1/protocols/:id/status` adiciona
+exatamente uma entrada ao `statusHistory` embutido no protocolo, com:
+
+- `from`: estado anterior;
+- `to`: novo estado;
+- `reason`: motivo opcional, normalizado com `trim`, limitado a 500 caracteres,
+  ou `null` quando omitido;
+- `changedAt`: instante da transição em UTC;
+- `changedBy`: usuário autenticado responsável pela transição.
+
+`statusHistory` é append-only: entradas existentes não podem ser editadas,
+substituídas ou removidas por operações normais do sistema. O cliente não pode
+enviar nem substituir `statusHistory` diretamente em payloads.
+
+O array é a fonte de verdade do histórico funcional de estados do protocolo.
+Cada transição também gera exatamente um `PROTOCOL_STATUS_CHANGED` no
+AuditLog, com metadata mínima e segura (`from`, `to` e `reason`, quando
+informado). AuditLog mantém finalidade de auditoria e rastreabilidade e não
+substitui o histórico funcional do domínio.
 
 ### DR-020 — Pausa
 
@@ -255,7 +297,14 @@ Durante a pausa:
 
 - histórico anterior permanece;
 - o protocolo pode voltar a `active`;
-- a retomada não apaga o período de pausa.
+- `pausedAt` registra a pausa mais recente e é atualizado em cada transição
+  `active -> paused`;
+- a retomada `paused -> active` não limpa `pausedAt` nem sobrescreve
+  `activatedAt`;
+- cada pausa e retomada permanece representada no `statusHistory`.
+
+Não existe `resumedAt` na V1. O histórico completo de retomadas é obtido pelo
+`statusHistory`.
 
 ### DR-021 — Encerramento
 
@@ -266,13 +315,16 @@ Após `closed`:
 - somente leitura;
 - não pode ser reaberto na V1;
 - não aceita novos registros vinculados ao protocolo;
-- histórico permanece disponível.
+- histórico permanece disponível;
+- `closedAt` registra a entrada em `closed` e nunca é apagado.
 
 ### DR-022 — Cancelamento
 
 Somente `draft` pode virar `cancelled`.
 
 Protocolos ativados não são cancelados; são encerrados.
+
+`cancelledAt` registra a entrada em `cancelled` e nunca é apagado.
 
 ### DR-023 — Datas
 
@@ -638,6 +690,10 @@ Registrar ações relevantes, incluindo:
 AuditLog é imutável para usuários.
 
 Somente a aplicação escreve.
+
+AuditLog registra auditoria e rastreabilidade, mas não é a fonte funcional
+exclusiva para reconstruir estados de entidades de domínio. Para protocolos, o
+histórico funcional de status pertence ao `Protocol.statusHistory` append-only.
 
 ### DR-067 — Conteúdo seguro
 

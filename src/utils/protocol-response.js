@@ -1,5 +1,8 @@
-function toProtocolResponse(protocol) {
-  return {
+function toProtocolResponse(
+  protocol,
+  { includeStatusHistory = true } = {},
+) {
+  const response = {
     id: protocol.id,
     athleteId: protocol.athleteId.toString(),
     professionalId: protocol.professionalId.toString(),
@@ -17,6 +20,18 @@ function toProtocolResponse(protocol) {
     createdAt: protocol.createdAt,
     updatedAt: protocol.updatedAt,
   };
+
+  if (includeStatusHistory) {
+    response.statusHistory = protocol.statusHistory.map((entry) => ({
+      from: entry.from,
+      to: entry.to,
+      reason: entry.reason,
+      changedAt: entry.changedAt,
+      changedBy: entry.changedBy.toString(),
+    }));
+  }
+
+  return response;
 }
 
 function toVersionResponse(version) {
@@ -26,8 +41,6 @@ function toVersionResponse(version) {
     version: version.version,
     createdBy: version.createdBy.toString(),
     changeReason: version.changeReason,
-    title: version.title,
-    objective: version.objective,
     startDate: version.startDate,
     endDate: version.endDate,
     continuous: version.continuous,
@@ -42,11 +55,6 @@ function toVersionResponse(version) {
       startDate: item.startDate,
       endDate: item.endDate,
       active: item.active,
-      dosage: item.dosage,
-      unit: item.unit,
-      frequency: item.frequency,
-      schedule: item.schedule,
-      notes: item.notes,
     })),
     createdAt: version.createdAt,
   };

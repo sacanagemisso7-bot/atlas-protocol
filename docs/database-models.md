@@ -180,6 +180,15 @@ Collection: `protocols`
   pausedAt: Date | null,
   closedAt: Date | null,
   cancelledAt: Date | null,
+  statusHistory: [
+    {
+      from: "draft" | "active" | "paused" | "closed" | "cancelled" | null,
+      to: "draft" | "active" | "paused" | "closed" | "cancelled",
+      reason: String | null,
+      changedAt: Date,
+      changedBy: ObjectId
+    }
+  ],
   createdAt: Date,
   updatedAt: Date
 }
@@ -191,7 +200,37 @@ Validações:
 - `currentVersion >= 1`;
 - `endDate >= startDate`;
 - `continuous=true` permite `endDate=null`;
-- profissional precisa estar `approved` e ter vínculo `active`.
+- profissional precisa estar `approved` e ter vínculo `active`;
+- na criação, `statusHistory` recebe exatamente a entrada inicial
+  `{ from: null, to: "draft", reason: null, changedAt, changedBy }`;
+- toda transição posterior adiciona exatamente uma nova entrada ao final de
+  `statusHistory`;
+- entradas de `statusHistory` são append-only e não podem ser editadas,
+  substituídas ou removidas por operações normais;
+- `reason` é opcional, recebe `trim`, tem no máximo 500 caracteres e é
+  persistido como `null` quando omitido;
+- `changedAt` é armazenado em UTC e `changedBy` identifica o usuário
+  autenticado responsável;
+- `statusHistory` é controlado pelo backend e não pode ser fornecido pelo
+  cliente em payloads de criação, edição, versionamento ou transição.
+
+Semântica dos timestamps de status:
+
+- `activatedAt`: data da primeira transição `draft -> active`; nunca é apagado
+  ou sobrescrito em uma retomada;
+- `pausedAt`: data da pausa mais recente; é atualizado em `active -> paused` e
+  não é limpo em `paused -> active`;
+- `closedAt`: data da entrada em `closed`; nunca é apagado;
+- `cancelledAt`: data da entrada em `cancelled`; nunca é apagado;
+- não existe `resumedAt`; retomadas `paused -> active` ficam integralmente no
+  `statusHistory`.
+
+`statusHistory` é a fonte de verdade do histórico funcional de estados do
+protocolo. AuditLog registra auditoria e rastreabilidade, mas não substitui esse
+histórico. A entrada inicial gera `PROTOCOL_CREATED`, sem
+`PROTOCOL_STATUS_CHANGED` duplicado; cada transição posterior gera exatamente
+um `PROTOCOL_STATUS_CHANGED` com metadata mínima (`from`, `to` e `reason`,
+quando informado).
 
 Índices:
 
@@ -242,7 +281,9 @@ Regras:
 - snapshot obrigatório;
 - `weekDays`: valores 1–7, sem duplicidade;
 - `time`: `HH:mm`;
-- versão publicada é imutável.
+- versão publicada é imutável;
+- a versão 1 é auditada por `PROTOCOL_CREATED`; cada versão posterior gera
+  exatamente um `PROTOCOL_VERSION_CREATED` após ser publicada.
 
 Índice:
 
@@ -574,6 +615,7 @@ Protocol
   -> athleteId
   -> professionalId
   -> ProtocolVersion[]
+  -> statusHistory[]
 
 TrackingRecord
   -> athlete

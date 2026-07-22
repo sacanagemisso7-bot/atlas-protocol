@@ -2,6 +2,7 @@ const AUDIT_ACTIONS = require('../constants/audit-actions');
 const AUDIT_ENTITY_TYPES = require('../constants/audit-entity-types');
 const ERROR_CODES = require('../constants/error-codes');
 const LINK_STATUSES = require('../constants/link-statuses');
+const PROTOCOL_STATUS_TRANSITIONS = require('../constants/protocol-status-transitions');
 const PROTOCOL_STATUSES = require('../constants/protocol-statuses');
 const USER_ROLES = require('../constants/user-roles');
 const ProfessionalAthleteLink = require('../models/professional-athlete-link');
@@ -15,6 +16,29 @@ const {
   toVersionResponse,
 } = require('../utils/protocol-response');
 const auditService = require('./audit-service');
+
+const protocolMutationLocks = new Map();
+
+async function withProtocolMutationLock(protocolId, operation) {
+  const key = protocolId.toString();
+  const previousLock = protocolMutationLocks.get(key) || Promise.resolve();
+  let releaseLock;
+  const currentLock = new Promise((resolve) => {
+    releaseLock = resolve;
+  });
+
+  protocolMutationLocks.set(key, currentLock);
+  await previousLock;
+
+  try {
+    return await operation();
+  } finally {
+    releaseLock();
+    if (protocolMutationLocks.get(key) === currentLock) {
+      protocolMutationLocks.delete(key);
+    }
+  }
+}
 
 function notFoundError(resource = 'Protocolo') {
   return new AppError(
@@ -41,6 +65,29 @@ function invalidTransitionError(message = 'Transição de estado inválida.') {
   );
 }
 
+function athleteLinkRequiredError() {
+  return new AppError(
+    403,
+    ERROR_CODES.ATHLETE_LINK_REQUIRED,
+    'É necessário possuir vínculo ativo com o atleta.',
+  );
+}
+
+function protocolReadOnlyError(
+  message = 'O protocolo está disponível somente para leitura.',
+) {
+  return new AppError(422, ERROR_CODES.PROTOCOL_READ_ONLY, message);
+}
+
+function assertStatusHistoryIntegrity(protocol) {
+  const lastEntry = (protocol.statusHistory || []).at(-1);
+  if (!lastEntry || lastEntry.to !== protocol.status) {
+    throw protocolReadOnlyError(
+      'O histórico de status do protocolo precisa ser migrado antes de novas alterações.',
+    );
+  }
+}
+
 async function hasActiveLink(professionalId, athleteId) {
   return ProfessionalAthleteLink.exists({
     professionalId,
@@ -49,11 +96,8 @@ async function hasActiveLink(professionalId, athleteId) {
   });
 }
 
-async function assertProfessionalAccess(requester, protocol) {
+function assertProfessionalOwnership(requester, protocol) {
   if (protocol.professionalId.toString() !== requester.id) {
-    throw notFoundError();
-  }
-  if (!(await hasActiveLink(requester.id, protocol.athleteId))) {
     throw notFoundError();
   }
 }
@@ -64,7 +108,10 @@ async function getAccessibleProtocol(requester, protocolId) {
 
   if (requester.role === USER_ROLES.ADMIN) return protocol;
   if (requester.role === USER_ROLES.PROFESSIONAL) {
-    await assertProfessionalAccess(requester, protocol);
+    assertProfessionalOwnership(requester, protocol);
+    if (!(await hasActiveLink(requester.id, protocol.athleteId))) {
+      throw notFoundError();
+    }
     return protocol;
   }
   if (
@@ -78,13 +125,19 @@ async function getAccessibleProtocol(requester, protocolId) {
 }
 
 async function getOwnedProtocol(requester, protocolId) {
-  const protocol = await getAccessibleProtocol(requester, protocolId);
+  const protocol = await Protocol.findById(protocolId);
+  if (!protocol) throw notFoundError();
   if (requester.role !== USER_ROLES.PROFESSIONAL) {
     throw new AppError(
       403,
       ERROR_CODES.FORBIDDEN,
       'Você não possui permissão para alterar este protocolo.',
     );
+  }
+
+  assertProfessionalOwnership(requester, protocol);
+  if (!(await hasActiveLink(requester.id, protocol.athleteId))) {
+    throw athleteLinkRequiredError();
   }
   return protocol;
 }
@@ -124,22 +177,55 @@ async function buildItems(items) {
     }
 
     return {
-      ...item,
+      substanceId: item.substanceId,
       substanceSnapshot: {
         name: substance.name,
         category: substance.category,
       },
       instructions: item.instructions || null,
+      frequencyType: item.frequencyType,
+      weekDays: item.weekDays,
       time: item.time || null,
       startDate: item.startDate || null,
       endDate: item.endDate || null,
-      dosage: item.dosage || null,
-      unit: item.unit || null,
-      frequency: item.frequency || null,
-      schedule: item.schedule || null,
-      notes: item.notes || null,
+      active: item.active,
     };
   });
+}
+
+function toTimestamp(value) {
+  return value ? new Date(value).getTime() : null;
+}
+
+function toComparableItem(item) {
+  return {
+    substanceId: item.substanceId.toString(),
+    substanceSnapshot: {
+      name: item.substanceSnapshot.name,
+      category: item.substanceSnapshot.category,
+    },
+    instructions: item.instructions || null,
+    frequencyType: item.frequencyType,
+    weekDays: [...(item.weekDays || [])].sort((left, right) => left - right),
+    time: item.time || null,
+    startDate: toTimestamp(item.startDate),
+    endDate: toTimestamp(item.endDate),
+    active: item.active !== false,
+  };
+}
+
+function hasMaterialVersionChange(currentVersion, nextValues, items) {
+  if (toTimestamp(currentVersion.startDate) !== toTimestamp(nextValues.startDate)) {
+    return true;
+  }
+  if (toTimestamp(currentVersion.endDate) !== toTimestamp(nextValues.endDate)) {
+    return true;
+  }
+  if (currentVersion.continuous !== nextValues.continuous) return true;
+
+  const currentItems = currentVersion.items.map(toComparableItem);
+  const nextItems = items.map(toComparableItem);
+  return JSON.stringify(currentItems) !== JSON.stringify(nextItems);
 }
 
 async function createProtocol(requester, input) {
@@ -152,15 +238,12 @@ async function createProtocol(requester, input) {
     );
   }
   if (!(await hasActiveLink(requester.id, athlete.id))) {
-    throw new AppError(
-      403,
-      ERROR_CODES.FORBIDDEN,
-      'É necessário possuir vínculo ativo com o atleta.',
-    );
+    throw athleteLinkRequiredError();
   }
 
   validateDateRange(input.startDate, input.endDate, input.continuous);
   const items = await buildItems(input.items);
+  const now = new Date();
   const protocol = await Protocol.create({
     athleteId: athlete.id,
     professionalId: requester.id,
@@ -171,6 +254,17 @@ async function createProtocol(requester, input) {
     startDate: input.startDate,
     endDate: input.endDate,
     continuous: input.continuous,
+    statusHistory: [
+      {
+        from: null,
+        to: PROTOCOL_STATUSES.DRAFT,
+        reason: null,
+        changedAt: now,
+        changedBy: requester.id,
+      },
+    ],
+    createdAt: now,
+    updatedAt: now,
   });
 
   let version;
@@ -179,8 +273,6 @@ async function createProtocol(requester, input) {
       protocolId: protocol.id,
       version: 1,
       createdBy: requester.id,
-      title: protocol.title,
-      objective: protocol.objective,
       startDate: protocol.startDate,
       endDate: protocol.endDate,
       continuous: protocol.continuous,
@@ -235,22 +327,21 @@ async function listProtocols(requester, query) {
     filters.athleteId = requester.id;
   }
 
-  if (query.substanceId) {
-    const protocolIds = await ProtocolVersion.distinct('protocolId', {
-      'items.substanceId': query.substanceId,
-    });
-    filters._id = { $in: protocolIds };
-  }
-
   const skip = (query.page - 1) * query.limit;
   const sort = { [query.sortBy]: query.sortOrder === 'asc' ? 1 : -1 };
   const [protocols, total] = await Promise.all([
-    Protocol.find(filters).sort(sort).skip(skip).limit(query.limit),
+    Protocol.find(filters)
+      .select('-statusHistory')
+      .sort(sort)
+      .skip(skip)
+      .limit(query.limit),
     Protocol.countDocuments(filters),
   ]);
 
   return {
-    protocols: protocols.map(toProtocolResponse),
+    protocols: protocols.map((protocol) =>
+      toProtocolResponse(protocol, { includeStatusHistory: false }),
+    ),
     meta: {
       page: query.page,
       limit: query.limit,
@@ -274,13 +365,12 @@ async function getProtocol(requester, protocolId) {
   };
 }
 
-async function updateProtocol(requester, protocolId, input) {
+async function updateProtocolWithoutLock(requester, protocolId, input) {
   const protocol = await getOwnedProtocol(requester, protocolId);
-  if ([PROTOCOL_STATUSES.CLOSED, PROTOCOL_STATUSES.CANCELLED].includes(protocol.status)) {
-    throw new AppError(
-      422,
-      ERROR_CODES.PROTOCOL_READ_ONLY,
-      'O protocolo está disponível somente para leitura.',
+  assertStatusHistoryIntegrity(protocol);
+  if (protocol.status !== PROTOCOL_STATUSES.DRAFT) {
+    throw protocolReadOnlyError(
+      'Somente protocolos em rascunho podem ser editados diretamente.',
     );
   }
 
@@ -308,22 +398,118 @@ async function updateProtocol(requester, protocolId, input) {
     ? await buildItems(input.items)
     : currentVersion.items.map((item) => item.toObject());
 
-  if (protocol.status === PROTOCOL_STATUSES.DRAFT) {
-    Object.assign(protocol, nextValues);
-    Object.assign(currentVersion, {
-      ...nextValues,
-      items,
-      changeReason: input.changeReason || currentVersion.changeReason,
-    });
-    await Promise.all([protocol.save(), currentVersion.save()]);
-    return {
-      protocol: toProtocolResponse(protocol),
-      currentVersion: toVersionResponse(currentVersion),
-    };
+  const previousValues = {
+    title: protocol.title,
+    objective: protocol.objective,
+    startDate: protocol.startDate,
+    endDate: protocol.endDate,
+    continuous: protocol.continuous,
+  };
+  Object.assign(currentVersion, {
+    startDate: nextValues.startDate,
+    endDate: nextValues.endDate,
+    continuous: nextValues.continuous,
+    items,
+  });
+  await currentVersion.validate();
+
+  const updatedProtocol = await Protocol.findOneAndUpdate(
+    {
+      _id: protocol.id,
+      professionalId: requester.id,
+      status: PROTOCOL_STATUSES.DRAFT,
+      updatedAt: protocol.updatedAt,
+    },
+    { $set: nextValues },
+    { new: true, runValidators: true },
+  );
+
+  if (!updatedProtocol) {
+    const latestProtocol = await Protocol.findById(protocol.id);
+    if (!latestProtocol) throw notFoundError();
+    if (latestProtocol.status !== PROTOCOL_STATUSES.DRAFT) {
+      throw protocolReadOnlyError(
+        'Somente protocolos em rascunho podem ser editados diretamente.',
+      );
+    }
+    throw new AppError(
+      409,
+      ERROR_CODES.DUPLICATE_RESOURCE,
+      'Conflito ao editar o protocolo. Tente novamente.',
+    );
   }
 
-  const nextVersionNumber = protocol.currentVersion + 1;
+  try {
+    await currentVersion.save();
+  } catch (error) {
+    await Protocol.findOneAndUpdate(
+      {
+        _id: protocol.id,
+        status: PROTOCOL_STATUSES.DRAFT,
+        updatedAt: updatedProtocol.updatedAt,
+      },
+      { $set: previousValues },
+      { runValidators: true },
+    ).catch(() => null);
+    throw error;
+  }
+
+  return {
+    protocol: toProtocolResponse(updatedProtocol),
+    currentVersion: toVersionResponse(currentVersion),
+  };
+}
+
+async function createProtocolVersionWithoutLock(requester, protocolId, input) {
+  const protocol = await getOwnedProtocol(requester, protocolId);
+  assertStatusHistoryIntegrity(protocol);
+  if (
+    [PROTOCOL_STATUSES.CLOSED, PROTOCOL_STATUSES.CANCELLED].includes(
+      protocol.status,
+    )
+  ) {
+    throw protocolReadOnlyError();
+  }
+  if (
+    ![PROTOCOL_STATUSES.ACTIVE, PROTOCOL_STATUSES.PAUSED].includes(
+      protocol.status,
+    )
+  ) {
+    throw invalidTransitionError(
+      'Somente protocolos ativos ou pausados podem receber uma nova versão.',
+    );
+  }
+
+  const currentVersion = await ProtocolVersion.findOne({
+    protocolId: protocol.id,
+    version: protocol.currentVersion,
+  });
+  if (!currentVersion) throw notFoundError('Versão');
+
+  const nextValues = {
+    startDate: input.startDate ?? protocol.startDate,
+    endDate: input.endDate !== undefined ? input.endDate : protocol.endDate,
+    continuous: input.continuous ?? protocol.continuous,
+  };
+  validateDateRange(
+    nextValues.startDate,
+    nextValues.endDate,
+    nextValues.continuous,
+  );
+
+  const items = input.items
+    ? await buildItems(input.items)
+    : currentVersion.items.map((item) => item.toObject());
+  if (!hasMaterialVersionChange(currentVersion, nextValues, items)) {
+    throw validationError(
+      'body',
+      'Informe ao menos uma alteração material efetiva.',
+    );
+  }
+  const previousVersionNumber = protocol.currentVersion;
+  const nextVersionNumber = previousVersionNumber + 1;
   let nextVersion;
+
   try {
     nextVersion = await ProtocolVersion.create({
       protocolId: protocol.id,
@@ -344,12 +530,56 @@ async function updateProtocol(requester, protocolId, input) {
     throw error;
   }
 
-  Object.assign(protocol, nextValues, { currentVersion: nextVersionNumber });
+  let updatedProtocol;
   try {
-    await protocol.save();
+    updatedProtocol = await Protocol.findOneAndUpdate(
+      {
+        _id: protocol.id,
+        professionalId: requester.id,
+        currentVersion: previousVersionNumber,
+        updatedAt: protocol.updatedAt,
+        status: {
+          $in: [PROTOCOL_STATUSES.ACTIVE, PROTOCOL_STATUSES.PAUSED],
+        },
+      },
+      {
+        $set: {
+          ...nextValues,
+          currentVersion: nextVersionNumber,
+        },
+      },
+      { new: true, runValidators: true },
+    );
   } catch (error) {
     await ProtocolVersion.deleteOne({ _id: nextVersion.id });
     throw error;
+  }
+
+  if (!updatedProtocol) {
+    await ProtocolVersion.deleteOne({ _id: nextVersion.id });
+    const latestProtocol = await Protocol.findById(protocol.id);
+    if (!latestProtocol) throw notFoundError();
+    if (
+      [PROTOCOL_STATUSES.CLOSED, PROTOCOL_STATUSES.CANCELLED].includes(
+        latestProtocol.status,
+      )
+    ) {
+      throw protocolReadOnlyError();
+    }
+    if (
+      ![PROTOCOL_STATUSES.ACTIVE, PROTOCOL_STATUSES.PAUSED].includes(
+        latestProtocol.status,
+      )
+    ) {
+      throw invalidTransitionError(
+        'O estado atual do protocolo não permite criar uma nova versão.',
+      );
+    }
+    throw new AppError(
+      409,
+      ERROR_CODES.DUPLICATE_RESOURCE,
+      'Conflito ao criar a próxima versão do protocolo.',
+    );
   }
 
   await auditService.record({
@@ -358,81 +588,112 @@ async function updateProtocol(requester, protocolId, input) {
     entityType: AUDIT_ENTITY_TYPES.PROTOCOL,
     entityId: protocol.id,
     metadata: {
-      previousVersion: nextVersionNumber - 1,
+      previousVersion: previousVersionNumber,
       newVersion: nextVersionNumber,
     },
   });
 
   return {
-    protocol: toProtocolResponse(protocol),
+    protocol: toProtocolResponse(updatedProtocol),
     currentVersion: toVersionResponse(nextVersion),
   };
 }
 
-async function transitionProtocol(requester, protocolId, action) {
+async function updateProtocolStatusWithoutLock(requester, protocolId, input) {
   const protocol = await getOwnedProtocol(requester, protocolId);
-  const now = new Date();
+  assertStatusHistoryIntegrity(protocol);
   const previousStatus = protocol.status;
+  const nextStatus = input.status;
+  const allowedTargets = PROTOCOL_STATUS_TRANSITIONS[previousStatus] || [];
 
-  if (action === 'activate') {
-    if (
-      ![PROTOCOL_STATUSES.DRAFT, PROTOCOL_STATUSES.PAUSED].includes(
-        protocol.status,
-      )
-    ) {
-      throw invalidTransitionError();
-    }
-    if (protocol.status === PROTOCOL_STATUSES.DRAFT) {
-      const version = await ProtocolVersion.findOne({
-        protocolId: protocol.id,
-        version: protocol.currentVersion,
-      });
-      if (!version || !version.items.length) {
-        throw new AppError(
-          400,
-          ERROR_CODES.PROTOCOL_EMPTY,
-          'O protocolo precisa possuir ao menos um item para ser ativado.',
-        );
-      }
-      protocol.activatedAt = now;
-    }
-    protocol.status = PROTOCOL_STATUSES.ACTIVE;
-    protocol.pausedAt = null;
-  } else if (action === 'pause') {
-    if (protocol.status !== PROTOCOL_STATUSES.ACTIVE) {
-      throw invalidTransitionError();
-    }
-    protocol.status = PROTOCOL_STATUSES.PAUSED;
-    protocol.pausedAt = now;
-  } else if (action === 'close') {
-    if (
-      ![PROTOCOL_STATUSES.ACTIVE, PROTOCOL_STATUSES.PAUSED].includes(
-        protocol.status,
-      )
-    ) {
-      throw invalidTransitionError();
-    }
-    protocol.status = PROTOCOL_STATUSES.CLOSED;
-    protocol.closedAt = now;
-  } else if (action === 'cancel') {
-    if (protocol.status !== PROTOCOL_STATUSES.DRAFT) {
-      throw invalidTransitionError(
-        'Somente protocolos em rascunho podem ser cancelados.',
-      );
-    }
-    protocol.status = PROTOCOL_STATUSES.CANCELLED;
-    protocol.cancelledAt = now;
+  if (!allowedTargets.includes(nextStatus)) {
+    throw invalidTransitionError();
   }
 
-  await protocol.save();
+  if (
+    previousStatus === PROTOCOL_STATUSES.DRAFT &&
+    nextStatus === PROTOCOL_STATUSES.ACTIVE
+  ) {
+    const version = await ProtocolVersion.findOne({
+      protocolId: protocol.id,
+      version: protocol.currentVersion,
+    });
+    if (!version || !version.items.length) {
+      throw new AppError(
+        400,
+        ERROR_CODES.PROTOCOL_EMPTY,
+        'O protocolo precisa possuir ao menos um item para ser ativado.',
+      );
+    }
+  }
+
+  const now = new Date();
+  const reason =
+    input.reason === null || input.reason === undefined
+      ? null
+      : input.reason.trim();
+  const statusChanges = { status: nextStatus };
+
+  if (
+    previousStatus === PROTOCOL_STATUSES.DRAFT &&
+    nextStatus === PROTOCOL_STATUSES.ACTIVE &&
+    !protocol.activatedAt
+  ) {
+    statusChanges.activatedAt = now;
+  }
+  if (
+    previousStatus === PROTOCOL_STATUSES.ACTIVE &&
+    nextStatus === PROTOCOL_STATUSES.PAUSED
+  ) {
+    statusChanges.pausedAt = now;
+  }
+  if (nextStatus === PROTOCOL_STATUSES.CLOSED) {
+    statusChanges.closedAt = now;
+  }
+  if (nextStatus === PROTOCOL_STATUSES.CANCELLED) {
+    statusChanges.cancelledAt = now;
+  }
+
+  const updatedProtocol = await Protocol.findOneAndUpdate(
+    {
+      _id: protocol.id,
+      professionalId: requester.id,
+      status: previousStatus,
+      updatedAt: protocol.updatedAt,
+    },
+    {
+      $set: statusChanges,
+      $push: {
+        statusHistory: {
+          from: previousStatus,
+          to: nextStatus,
+          reason,
+          changedAt: now,
+          changedBy: requester.id,
+        },
+      },
+    },
+    { new: true, runValidators: true },
+  )
+    .allowAtomicStatusTransition();
+
+  if (!updatedProtocol) {
+    throw invalidTransitionError(
+      'O protocolo foi alterado por outra operação.',
+    );
+  }
+
+  const auditMetadata = { from: previousStatus, to: nextStatus };
+  if (reason !== null) auditMetadata.reason = reason;
   await auditService.record({
     actorId: requester.id,
     action: AUDIT_ACTIONS.PROTOCOL_STATUS_CHANGED,
     entityType: AUDIT_ENTITY_TYPES.PROTOCOL,
     entityId: protocol.id,
-    metadata: { from: previousStatus, to: protocol.status },
+    metadata: auditMetadata,
   });
-  return toProtocolResponse(protocol);
+
+  return toProtocolResponse(updatedProtocol);
 }
 
 async function listVersions(requester, protocolId) {
@@ -453,12 +714,31 @@ async function getVersion(requester, protocolId, versionNumber) {
   return toVersionResponse(version);
 }
 
+async function updateProtocol(requester, protocolId, input) {
+  return withProtocolMutationLock(protocolId, () =>
+    updateProtocolWithoutLock(requester, protocolId, input),
+  );
+}
+
+async function createProtocolVersion(requester, protocolId, input) {
+  return withProtocolMutationLock(protocolId, () =>
+    createProtocolVersionWithoutLock(requester, protocolId, input),
+  );
+}
+
+async function updateProtocolStatus(requester, protocolId, input) {
+  return withProtocolMutationLock(protocolId, () =>
+    updateProtocolStatusWithoutLock(requester, protocolId, input),
+  );
+}
+
 module.exports = {
   createProtocol,
+  createProtocolVersion,
   getProtocol,
   getVersion,
   listProtocols,
   listVersions,
-  transitionProtocol,
   updateProtocol,
+  updateProtocolStatus,
 };

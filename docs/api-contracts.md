@@ -533,6 +533,24 @@ Profissional `approved` com vínculo `active`.
 
 Cria protocolo `draft` e versão 1.
 
+`statusHistory` não é aceito no payload de criação; o campo é gerenciado pelo
+backend.
+
+O backend cria também a entrada inicial de `statusHistory`:
+
+```json
+{
+  "from": null,
+  "to": "draft",
+  "reason": null,
+  "changedAt": "2026-08-01T12:00:00.000Z",
+  "changedBy": "ObjectId"
+}
+```
+
+A criação gera `PROTOCOL_CREATED`, sem gerar
+`PROTOCOL_STATUS_CHANGED` adicional para a entrada inicial.
+
 ### GET `/protocols`
 
 Filtros:
@@ -550,11 +568,33 @@ Escopo aplicado automaticamente.
 
 Retorna protocolo + versão atual.
 
+O objeto `protocol` inclui o histórico funcional seguro em `statusHistory`,
+ordenado na sequência em que as transições ocorreram:
+
+```json
+{
+  "statusHistory": [
+    {
+      "from": null,
+      "to": "draft",
+      "reason": null,
+      "changedAt": "2026-08-01T12:00:00.000Z",
+      "changedBy": "ObjectId"
+    }
+  ]
+}
+```
+
+Cada item expõe somente `from`, `to`, `reason`, `changedAt` e `changedBy`.
+
 ### PATCH `/protocols/:id`
 
 Somente `draft`.
 
 Payload parcial permitido conforme validator.
+
+`status`, `statusHistory` e timestamps de transição são controlados pelo
+backend e não são aceitos nesse payload.
 
 ### PATCH `/protocols/:id/status`
 
@@ -563,9 +603,14 @@ Endpoint único de transição de status.
 ```json
 {
   "status": "active",
-  "reason": "Motivo opcional conforme transição."
+  "reason": "Motivo opcional."
 }
 ```
+
+`reason` é opcional em todas as transições válidas. Quando informado, deve ser
+string, recebe `trim` e aceita no máximo 500 caracteres. Quando omitido, é
+persistido como `null` no histórico. O cliente não pode enviar
+`statusHistory`, timestamps de transição ou `changedBy`.
 
 Transições válidas:
 
@@ -576,6 +621,30 @@ paused -> active | closed
 ```
 
 Status `closed` e `cancelled` são finais.
+
+Cada transição válida:
+
+- adiciona exatamente uma entrada append-only em `Protocol.statusHistory`;
+- registra `changedAt` no instante da mudança e `changedBy` com o usuário
+  autenticado;
+- gera exatamente um `PROTOCOL_STATUS_CHANGED` no AuditLog, com metadata
+  mínima `{ from, to, reason }`, omitindo `reason` quando `null` se esse for o
+  padrão de serialização adotado;
+- não cria nova versão de conteúdo.
+
+Semântica dos timestamps:
+
+- `activatedAt`: primeira transição `draft -> active`; nunca é apagado nem
+  sobrescrito em `paused -> active`;
+- `pausedAt`: pausa mais recente; `active -> paused` o atualiza e
+  `paused -> active` não o limpa;
+- `closedAt`: preenchido ao entrar em `closed` e nunca apagado;
+- `cancelledAt`: preenchido ao entrar em `cancelled` e nunca apagado;
+- não existe `resumedAt` na V1; retomadas ficam registradas em
+  `statusHistory`.
+
+`Protocol.statusHistory` é a fonte de verdade do histórico funcional de
+estados. AuditLog permanece como trilha de auditoria e não é seu substituto.
 
 Erros: `PROTOCOL_EMPTY`, `ATHLETE_LINK_REQUIRED`, `INVALID_STATE_TRANSITION`.
 
@@ -592,6 +661,12 @@ Cria nova versão para protocolo `active` ou `paused`.
   "items": []
 }
 ```
+
+`statusHistory` não é aceito no payload de versionamento.
+
+Cada criação bem-sucedida por este endpoint gera exatamente um
+`PROTOCOL_VERSION_CREATED` no AuditLog, com metadata segura das versões
+anterior e nova. A versão inicial é coberta por `PROTOCOL_CREATED`.
 
 ### GET `/protocols/:id/versions`
 
@@ -1101,12 +1176,18 @@ GET /dashboard/athlete
 POST /tracking-records/:id/complete
 POST /tracking-records/:id/miss
 POST /tracking-records/:id/cancel
+PATCH /protocols/:id/activate
+PATCH /protocols/:id/pause
+PATCH /protocols/:id/resume
+PATCH /protocols/:id/close
+PATCH /protocols/:id/cancel
 ```
 
 Substituições:
 
 ```text
 protocol delete -> PATCH /protocols/:id/status com cancelled quando draft
+transições legadas de protocolo -> PATCH /protocols/:id/status
 substance delete -> PATCH /substances/:id/deactivate
 exam delete -> PATCH /exams/:id/archive
 progress delete -> PATCH /progress/:id/archive
